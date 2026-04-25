@@ -146,25 +146,6 @@ export const IntakeModal = ({ visible, onComplete }: Props) => {
               />
             </Field>
 
-            {/* Need */}
-            <Field label="What do you need?" error={formState.errors.need?.message}>
-              <Controller
-                control={control}
-                name="need"
-                render={({ field: { value, onChange } }) => (
-                  <TextInput
-                    multiline
-                    numberOfLines={2}
-                    maxLength={300}
-                    value={value}
-                    onChangeText={onChange}
-                    style={[styles.textarea]}
-                    placeholderTextColor={colors.mutedForeground}
-                  />
-                )}
-              />
-            </Field>
-
             {/* Distance */}
             <View style={{ gap: 8, paddingTop: 4 }}>
               <View style={styles.distRow}>
