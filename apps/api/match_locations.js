@@ -2,8 +2,6 @@ const OpenAI = require("openai");
 const { db } = require("./firebase");
 
 const COORDINATE_THRESHOLD_KM = 0.1; // 100 meters
-const FOOD_FALLBACK_PHONE = "+16262230129";
-const SHELTER_FALLBACK_PHONE = "+17342639095";
 
 // ─── Geo helpers ─────────────────────────────────────────────────────────────
 
@@ -40,12 +38,6 @@ function normalizePhoneNumber(phone) {
   }
 
   return trimmed;
-function getHardcodedPhoneForCategory(category) {
-  return category === "food" ? FOOD_FALLBACK_PHONE : SHELTER_FALLBACK_PHONE;
-}
-
-function shouldCallGoogleLocation(location) {
-  return location.phone === SHELTER_FALLBACK_PHONE;
 }
 
 // ─── DB matching / upserting ──────────────────────────────────────────────────
@@ -206,7 +198,7 @@ async function triggerBlandCall(location, person) {
     },
     body: JSON.stringify({
       phone_number: phoneNumber,
-      task: buildBlandPrompt(person),
+      task: buildBlandPrompt(location, person),
       voice: "nat",
       wait_for_greeting: true,
       record: true,
@@ -224,6 +216,18 @@ async function triggerBlandCall(location, person) {
 }
 
 async function pollForTranscript(callId, maxWaitMs = 150_000) {
+  const extractTranscript = (data) => {
+    if (data?.transcripts) return data.transcripts;
+    if (data?.transcript) return data.transcript;
+    if (typeof data?.concatenated_transcript === "string") {
+      return data.concatenated_transcript;
+    }
+    if (typeof data?.transcript_text === "string") {
+      return data.transcript_text;
+    }
+    return null;
+  };
+
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 6000));
@@ -233,8 +237,28 @@ async function pollForTranscript(callId, maxWaitMs = 150_000) {
     });
     const data = await res.json();
 
+    console.log(`[bland/poll] callId=${callId} status=${data.status} transcriptKeys:`, Object.keys(data).filter(k => k.toLowerCase().includes("transcript")));
     if (data.status === "completed" || data.status === "complete") {
-      return data.transcripts ?? data.transcript ?? null;
+      let transcript = extractTranscript(data);
+      console.log(`[bland/poll] callId=${callId} completed, extractedTranscript:`, transcript ? (Array.isArray(transcript) ? `array[${transcript.length}]` : String(transcript).slice(0, 120)) : "NULL");
+      if (transcript) return transcript;
+
+      // Some completed calls populate transcript a few seconds later.
+      for (let i = 0; i < 4; i += 1) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const retryRes = await fetch(`https://api.bland.ai/v1/calls/${callId}`, {
+          headers: { Authorization: process.env.BLAND_API_KEY },
+        });
+        const retryData = await retryRes.json();
+        transcript = extractTranscript(retryData);
+        if (transcript) return transcript;
+      }
+
+      console.warn("Bland.ai call completed but no transcript available", {
+        callId,
+        status: data.status,
+      });
+      return null;
     }
     if (data.status === "failed" || data.status === "error") {
       console.error("Bland.ai call failed, id:", callId);
@@ -282,24 +306,26 @@ Always respond with valid JSON only — no markdown, no explanation.`;
 Location call transcripts:
 ${transcriptBlock}
 
-Return a JSON array. One object per shelter:
+Return JSON with this exact shape:
 {
-  "location_name": string,
-  "category": "food" | "housing" | "shelter" | "unknown",
-  "space_available": true | false | null,
-  "question_1_answer": string | null,
-  "question_2_answer": string | null,
-  "requirements": string | null,
-  "checkin_info": string | null,
-  "relevant_notes": string | null
+  "results": [
+    {
+      "location_name": string,
+      "category": "food" | "housing" | "shelter" | "unknown",
+      "space_available": true | false | null,
+      "question_1_answer": string | null,
+      "question_2_answer": string | null,
+      "requirements": string | null,
+      "checkin_info": string | null,
+      "relevant_notes": string | null
+    }
+  ]
 }
 
-Interpretation rules:
-- If category is food, question_1_answer is the direct answer to "What food is available?"
-- If category is food, question_2_answer is the direct answer to "When should I come?"
-- If category is housing/shelter, question_1_answer is the direct answer to "How many beds are available?"
-- If category is housing/shelter, question_2_answer is the direct answer to "What time should they arrive for best chance of getting a bed?"
-- If a question is unanswered, set that answer to "Unknown".`;
+One object per shelter. Interpretation rules:
+- If category is food, question_1_answer = direct answer to "What food is available?", question_2_answer = "When should I come?"
+- If category is housing/shelter, question_1_answer = direct answer to "How many beds are available?", question_2_answer = "What time should they arrive?"
+- If a question is unanswered, set that field to "Unknown".`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
@@ -312,10 +338,11 @@ Interpretation rules:
 
   try {
     const parsed = JSON.parse(completion.choices[0].message.content);
-    return Array.isArray(parsed)
-      ? parsed
-      : (parsed.shelters ?? parsed.locations ?? []);
-  } catch {
+    const arr = parsed.results ?? [];
+    console.log("[interpretTranscripts] final array length:", arr.length, arr);
+    return arr;
+  } catch (e) {
+    console.error("[interpretTranscripts] parse error:", e.message, completion.choices[0].message.content.slice(0, 200));
     return [];
   }
 }
@@ -338,6 +365,7 @@ async function match_locations(google_places_locs, person, options = {}) {
   // 1. Match or create each place in Firestore
   const dbLocations = await Promise.all(places.map(upsertLocation));
   const forceCall = options.forceCall === true;
+  const now = new Date().toISOString();
 
   // 2. Split: already called today vs needs a call
   const alreadyCalled = dbLocations.filter(
@@ -350,25 +378,27 @@ async function match_locations(google_places_locs, person, options = {}) {
     (loc) => (forceCall || !isToday(loc.last_called)) && !loc.phone,
   );
 
+  console.log("[match_locations] needsCalling count:", needsCalling.length);
+  console.log("[match_locations] needsCalling phones:", needsCalling.map(l => ({ name: l.name, phone: l.phone })));
+
   // 3. Call locations that need it via Bland.ai (parallel)
   const callResults = await Promise.all(
     needsCalling.map(async (location) => {
+      console.log(`[bland] triggering call for ${location.name} (${location.phone})`);
       const transcript = await callLocationViaBland(location, person);
+      console.log(`[bland] transcript for ${location.name}:`, transcript ? `got ${Array.isArray(transcript) ? transcript.length + ' entries' : typeof transcript}` : "NULL");
       return { location, transcript };
     }),
   );
 
+  console.log("[match_locations] callResults summary:", callResults.map(r => ({ name: r.location.name, hasTranscript: !!r.transcript })));
+
   // 4. Interpret transcripts with OpenAI
   const interpretations = await interpretTranscripts(callResults, person);
+  console.log("[match_locations] interpretations:", JSON.stringify(interpretations, null, 2));
 
   // 5. Persist results to Firestore via batch write
   const batch = db.batch();
-  for (const location of forceUpdatedToday) {
-    batch.update(db.collection("locations").doc(location.id), {
-      last_called: now,
-      updated_at: now,
-    });
-  }
   for (const { location } of callResults) {
     const interp = interpretations.find(
       (i) => i.location_name === location.name,
@@ -384,7 +414,8 @@ async function match_locations(google_places_locs, person, options = {}) {
   await batch.commit();
 
   // 6. Build response (no re-read needed — merge update fields into in-memory data)
-  const justCalled = callResults.map(({ location }) => {
+  console.log("[match_locations] building justCalled, callResults transcripts:", callResults.map(r => ({ name: r.location.name, transcriptType: typeof r.transcript, transcriptLength: Array.isArray(r.transcript) ? r.transcript.length : (r.transcript ? String(r.transcript).length : 0) })));
+  const justCalled = callResults.map(({ location, transcript }) => {
     const interp = interpretations.find(
       (i) => i.location_name === location.name,
     );
@@ -399,6 +430,7 @@ async function match_locations(google_places_locs, person, options = {}) {
       requirements: interp?.requirements ?? null,
       checkin_info: interp?.checkin_info ?? null,
       relevant_notes: interp?.relevant_notes ?? null,
+      transcript: transcript ?? null,
     };
   });
 
@@ -407,10 +439,12 @@ async function match_locations(google_places_locs, person, options = {}) {
     call_status: "called_today",
   }));
 
-  return {
+  const finalResult = {
     locations: [...justCalled, ...previouslyCalled],
     no_phone: noPhone.map((loc) => ({ ...loc, call_status: "no_phone" })),
   };
+  console.log("[match_locations] FINAL locations transcript presence:", finalResult.locations.map(l => ({ name: l.name, hasTranscript: !!l.transcript, transcriptType: typeof l.transcript })));
+  return finalResult;
 }
 
 module.exports = { match_locations };

@@ -351,13 +351,52 @@ app.post("/api/generate-outline", async (req, res) => {
   try {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const { locations = [], no_phone = [] } = matchResult;
+    console.log("[generate-outline] received locations count:", locations.length, "no_phone count:", no_phone.length);
+    console.log("[generate-outline] transcript presence per location:", locations.map(l => ({ name: l.name, hasTranscript: !!l.transcript, transcriptType: typeof l.transcript, call_status: l.call_status })));
     const allLocations = [...locations, ...no_phone];
+    console.log("[generate-outline] allLocations count:", allLocations.length);
 
     if (!allLocations.length) {
       return res.json({
         outline: "No locations available to generate an outline.",
       });
     }
+
+    const transcriptToText = (transcript) => {
+      console.log("[transcriptToText] input type:", typeof transcript, "value:", transcript === null ? "null" : transcript === undefined ? "undefined" : Array.isArray(transcript) ? `array[${transcript.length}]` : String(transcript).slice(0, 80));
+      if (!transcript) return "None";
+      if (typeof transcript === "string") return transcript;
+      if (Array.isArray(transcript)) {
+        const lines = transcript
+          .map((entry) => {
+            const speaker =
+              entry && typeof entry === "object" && typeof entry.user === "string"
+                ? entry.user
+                : "unknown";
+            const text =
+              entry && typeof entry === "object" && typeof entry.text === "string"
+                ? entry.text
+                : "";
+            return `${speaker}: ${text}`.trim();
+          })
+          .filter(Boolean);
+        return lines.length ? lines.join("\n") : JSON.stringify(transcript);
+      }
+      return JSON.stringify(transcript);
+    };
+
+    const getQuestionLabels = (category) => {
+      if (category === "food") {
+        return {
+          q1: "What food is available?",
+          q2: "When should I come?",
+        };
+      }
+      return {
+        q1: "How many beds are available?",
+        q2: "What time should they arrive for best chance of getting a bed?",
+      };
+    };
 
     const locationDetails = allLocations
       .map((loc) => {
@@ -372,67 +411,45 @@ app.post("/api/generate-outline", async (req, res) => {
                 ? "No space available"
                 : "Availability unknown";
 
-        const question1Label = isFood
-          ? "What food is available?"
-          : "How many beds are available?";
-        const question2Label = isFood
-          ? "When should I come?"
-          : "What time should they arrive for best chance of getting a bed?";
+        const questionLabels = getQuestionLabels(loc.category);
 
         return `### ${loc.name}
 - Address: ${loc.address ?? "Unknown"}
 - Phone: ${loc.phone ?? "N/A"}
 - Category: ${loc.category ?? "Unknown"}
 - Status: ${status}
-- Question 1 (${question1Label}): ${loc.question_1_answer ?? "Unknown"}
-- Question 2 (${question2Label}): ${loc.question_2_answer ?? "Unknown"}
+- Question 1 (${questionLabels.q1}): ${loc.question_1_answer ?? "Unknown"}
+- Question 2 (${questionLabels.q2}): ${loc.question_2_answer ?? "Unknown"}
 - Requirements: ${loc.requirements ?? "None listed"}
 - Check-in Info: ${loc.checkin_info ?? "Not provided"}
-- Notes: ${loc.relevant_notes ?? "None"}`;
+- Notes: ${loc.relevant_notes ?? "None"}
+- Transcript:
+${transcriptToText(loc.transcript)}`;
       })
       .join("\n\n");
 
-    const systemPrompt = `You are a helpful assistant that creates personalized outlines for people experiencing homelessness.
-Given a list of locations with their availability and details, create a clear, compassionate outline that explains how each location relates to the person's specific needs.
-You must include category-specific direct answers in each recommendation:
-- For category food: (1) "What food is available?" (2) "When should I come?"
-- For category shelter/housing: (1) "How many beds are available?" (2) "What time should they arrive for best chance of getting a bed?"
-If the data is missing, clearly say "Unknown".
-Always respond with valid JSON only — no markdown, no explanation.`;
+    const systemPrompt = `You help connect people experiencing homelessness to shelter and food.
+Write a single, plain paragraph (2-4 sentences) telling the person what you found.
+Be direct and warm. Include only facts from the provided data — beds/food available, arrival time, requirements, check-in info.
+Do not use bullet points, headers, or JSON. Just a paragraph of plain text.`;
 
-    const userPrompt = `Person seeking shelter:
-- Name: ${person.name ?? "Unknown"}
-- Gender: ${person.gender ?? "Not specified"}
-- Specific needs/message: ${person.message}
-- Current location: ${person.current_location ?? "Unknown"}
+    const userPrompt = `Person: ${person.name ?? "someone"}, ${person.gender ?? ""}, needs: ${person.message}
 
-Available locations:
 ${locationDetails}
 
-Return a JSON object with this structure:
-{
-  "summary": "A brief overview of the options available",
-  "recommendations": [
-    {
-      "location_name": string,
-      "reason": "Why this location is a good fit for the person's needs",
-      "action": "What the person should do next, and include category-specific direct answers. For food: (1) What food is available? (2) When should I come? For shelter/housing: (1) How many beds are available? (2) What time should they arrive for best chance of getting a bed? If unknown, say Unknown."
-    }
-  ],
-  "general_notes": "Any helpful tips or information for the person"
-}`;
+Write one paragraph summarizing what is available and what they should do.`;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
-      response_format: { type: "json_object" },
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
     });
 
-    const parsed = JSON.parse(completion.choices[0].message.content);
-    return res.json({ outline: parsed });
+    const message = completion.choices[0].message.content?.trim() ?? "I found some options nearby. Please call ahead to confirm availability.";
+    console.log("[generate-outline] message:", message);
+    return res.json({ outline: message });
   } catch (err) {
     console.error("generate-outline error:", err);
     return res.status(500).json({ error: "Internal server error" });

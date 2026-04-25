@@ -112,6 +112,8 @@ async function generateOutline(locations, person) {
 - Phone: ${loc.phone ?? "N/A"}
 - Category: ${loc.category ?? "Unknown"}
 - Status: ${status}
+- Question 1 (How many beds are available?): ${loc.question_1_answer ?? "Unknown"}
+- Question 2 (What time should they arrive for best chance of getting a bed?): ${loc.question_2_answer ?? "Unknown"}
 - Requirements: ${loc.requirements ?? "None listed"}
 - Check-in Info: ${loc.checkin_info ?? "Not provided"}
 - Notes: ${loc.relevant_notes ?? "None"}`;
@@ -224,6 +226,8 @@ ${JSON.stringify(transcript, null, 2)}
 Return a JSON array. One object per shelter:
 {
   "location_name": string,
+  "question_1_answer": string | null,
+  "question_2_answer": string | null,
   "space_available": true | false | null,
   "requirements": string | null,
   "checkin_info": string | null,
@@ -238,9 +242,17 @@ Return a JSON array. One object per shelter:
 
     // Handle both array and object responses
     const results = Array.isArray(interpreted) ? interpreted : [interpreted];
+    const first = results[0] ?? {};
+    const checkinInfo = first.checkin_info ?? null;
+    const inferredQuestion2 = typeof checkinInfo === "string" && checkinInfo.trim()
+      ? checkinInfo
+      : null;
+
     locationResult = {
       ...testLocation,
-      ...results[0],
+      ...first,
+      question_1_answer: first.question_1_answer ?? null,
+      question_2_answer: first.question_2_answer ?? inferredQuestion2,
       call_status: "completed"
     };
   }
