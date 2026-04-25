@@ -1,11 +1,8 @@
-const { db, FieldValue } = require("./firebase");
-const { match_locations } = require("./match_locations");
-
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const { searchPlacesByFilter } = require("./src/services/googlePlaces");
-const db = require("./db");
+const { db } = require("./firebase");
 const { match_locations } = require("./match_locations");
 
 const app = express();
@@ -35,30 +32,42 @@ app.get("/api/places", async (req, res) => {
       longitude: req.query.longitude,
       radius: req.query.radius,
       filter: req.query.filter,
+      isFood: req.query.isFood,
+      isHome: req.query.isHome,
     });
-    res.json({ count: results.length, results });
+
+    const count = Object.values(results).reduce(
+      (total, entries) => total + entries.length,
+      0,
+    );
+
+    res.json({ count, results });
   } catch (error) {
     const statusCode =
       error.message === "GOOGLE_MAPS_API_KEY is not configured." ? 500 : 400;
     res.status(statusCode).json({ error: error.message });
   }
-    // res will look like
-    // { count: number; results: {
-    //   "house": {
-    //     latitude: place.location?.latitude ?? null,
-    //     longitude: place.location?.longitude ?? null,
-    //     address: place.formattedAddress ?? null,
-    //     phoneNumber:
-    //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
-    //   }[],
-    //   "food": {
-    //     latitude: place.location?.latitude ?? null,
-    //     longitude: place.location?.longitude ?? null,
-    //     address: place.formattedAddress ?? null,
-    //     phoneNumber:
-    //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
-    //   }[]
-    // }}
+  // res will look like
+  // { count: number; results: {
+  //   "housing": {
+  //     name: place.displayName?.text ?? place.name ?? null,
+  //     placeId: place.id ?? null,
+  //     latitude: place.location?.latitude ?? null,
+  //     longitude: place.location?.longitude ?? null,
+  //     address: place.formattedAddress ?? null,
+  //     phoneNumber:
+  //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
+  //   }[],
+  //   "food": {
+  //     name: place.displayName?.text ?? place.name ?? null,
+  //     placeId: place.id ?? null,
+  //     latitude: place.location?.latitude ?? null,
+  //     longitude: place.location?.longitude ?? null,
+  //     address: place.formattedAddress ?? null,
+  //     phoneNumber:
+  //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
+  //   }[]
+  // }}
 });
 
 // Locations CRUD
