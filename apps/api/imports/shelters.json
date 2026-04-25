@@ -1,0 +1,52 @@
+[
+    {
+        "name": "30th Street Men's Shelter (DHS Intake Center)",
+        "address": "400-430 East 30th Street, New York, NY 10016",
+        "phone": "718-557-1399",
+        "latitude": 40.7412,
+        "longitude": -73.9768,
+        "google_place_id": "dhs_30th_street_manhattan",
+        "last_called": "2026-04-25T13:45:00Z",
+        "space_available": 1
+    },
+    {
+        "name": "Adult Family Intake Center (AFIC)",
+        "address": "400-430 East 30th Street, New York, NY 10016",
+        "phone": "718-557-1399",
+        "latitude": 40.7412,
+        "longitude": -73.9768,
+        "google_place_id": "dhs_afic_manhattan",
+        "last_called": "2026-04-25T10:20:00Z",
+        "space_available": 0
+    },
+    {
+        "name": "Mainchance Drop-In Center",
+        "address": "120 East 32nd Street, New York, NY 10016",
+        "phone": null,
+        "latitude": 40.7461,
+        "longitude": -73.9822,
+        "google_place_id": "mainchance_dhs",
+        "last_called": "2026-04-25T09:00:00Z",
+        "space_available": null
+    },
+    {
+        "name": "Olivieri Center",
+        "address": "257 West 30th Street, New York, NY 10001",
+        "phone": null,
+        "latitude": 40.7502,
+        "longitude": -73.9955,
+        "google_place_id": "olivieri_center_nyc",
+        "last_called": "2026-04-24T22:30:00Z",
+        "space_available": 1
+    },
+    {
+        "name": "Alexander Abraham Residence",
+        "address": "341 West 51st Street, New York, NY 10019",
+        "phone": "212-582-8680",
+        "latitude": 40.7632,
+        "longitude": -73.9876,
+        "google_place_id": "alexander_abraham_nyc",
+        "last_called": "2026-04-23T18:15:00Z",
+        "space_available": null
+    }
+]

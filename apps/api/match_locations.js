@@ -2,6 +2,8 @@ const OpenAI = require("openai");
 const { db } = require("./firebase");
 
 const COORDINATE_THRESHOLD_KM = 0.1; // 100 meters
+const FOOD_FALLBACK_PHONE = "+16262230129";
+const SHELTER_FALLBACK_PHONE = "+17342639095";
 
 // ─── Geo helpers ─────────────────────────────────────────────────────────────
 
@@ -38,6 +40,12 @@ function normalizePhoneNumber(phone) {
   }
 
   return trimmed;
+function getHardcodedPhoneForCategory(category) {
+  return category === "food" ? FOOD_FALLBACK_PHONE : SHELTER_FALLBACK_PHONE;
+}
+
+function shouldCallGoogleLocation(location) {
+  return location.phone === SHELTER_FALLBACK_PHONE;
 }
 
 // ─── DB matching / upserting ──────────────────────────────────────────────────
@@ -150,12 +158,31 @@ async function upsertLocation(place) {
 
 // ─── Bland.ai ────────────────────────────────────────────────────────────────
 
-function buildBlandPrompt(person) {
+function isFoodCategory(category) {
+  return category === "food";
+}
+
+function buildBlandPrompt(location, person) {
   // TODO: finalize prompt wording with team
   const genderPhrase = person.gender
     ? `a ${person.gender} individual`
     : "an individual";
-  return `You are calling a homeless shelter on behalf of someone in need of shelter tonight.
+  const categoryLabel = isFoodCategory(location.category)
+    ? "food provider"
+    : "homeless shelter";
+  const questionBlock = isFoodCategory(location.category)
+    ? `1. Ask exactly: "What food is available?"
+2. Ask exactly: "When should I come?"
+3. Ask about any eligibility requirements.
+4. Ask for the best way to arrive or check in.
+5. Be polite, brief, and clear.`
+    : `1. Ask exactly: "How many beds are available?"
+2. Ask exactly: "What time should they arrive for best chance of getting a bed?"
+3. Ask about any gender-specific, age, or sobriety requirements.
+4. Ask for the best way to arrive or check in.
+5. Be polite, brief, and clear.`;
+
+  return `You are calling a ${categoryLabel} on behalf of someone in need tonight.
 
 You are calling on behalf of a non-English speaker. If the person who answers speaks a language other than English, please communicate with them in their language.
 
@@ -163,11 +190,7 @@ You are calling on behalf of ${genderPhrase} named ${person.name ?? "someone"}. 
 "${person.message}"
 
 Please:
-1. Ask exactly: "How many beds are available?"
-2. Ask exactly: "What time should they arrive for best chance of getting a bed?"
-3. Ask about any gender-specific, age, or sobriety requirements.
-4. Ask for the best way to arrive or check in.
-5. Be polite, brief, and clear.
+${questionBlock}
 
 Thank them and end the call.`;
 }
@@ -239,11 +262,15 @@ async function interpretTranscripts(callResults, person) {
   const transcriptBlock = withTranscripts
     .map(
       ({ location, transcript }) =>
-        `### ${location.name}\nPhone: ${location.phone}\nTranscript:\n${JSON.stringify(transcript, null, 2)}`,
+        `### ${location.name}
+Category: ${location.category ?? "unknown"}
+Phone: ${location.phone}
+Transcript:
+${JSON.stringify(transcript, null, 2)}`,
     )
     .join("\n\n---\n\n");
 
-  const systemPrompt = `You help connect people experiencing homelessness to shelter.
+  const systemPrompt = `You help connect people experiencing homelessness to shelter and food services.
 Analyze call transcripts and extract information relevant to the specific person seeking help.
 Always respond with valid JSON only — no markdown, no explanation.`;
 
@@ -252,17 +279,27 @@ Always respond with valid JSON only — no markdown, no explanation.`;
 - Gender: ${person.gender ?? "Unknown"}
 - Needs: ${person.message ?? "General shelter for tonight"}
 
-Shelter call transcripts:
+Location call transcripts:
 ${transcriptBlock}
 
 Return a JSON array. One object per shelter:
 {
   "location_name": string,
+  "category": "food" | "housing" | "shelter" | "unknown",
   "space_available": true | false | null,
+  "question_1_answer": string | null,
+  "question_2_answer": string | null,
   "requirements": string | null,
   "checkin_info": string | null,
   "relevant_notes": string | null
-}`;
+}
+
+Interpretation rules:
+- If category is food, question_1_answer is the direct answer to "What food is available?"
+- If category is food, question_2_answer is the direct answer to "When should I come?"
+- If category is housing/shelter, question_1_answer is the direct answer to "How many beds are available?"
+- If category is housing/shelter, question_2_answer is the direct answer to "What time should they arrive for best chance of getting a bed?"
+- If a question is unanswered, set that answer to "Unknown".`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
@@ -325,8 +362,13 @@ async function match_locations(google_places_locs, person, options = {}) {
   const interpretations = await interpretTranscripts(callResults, person);
 
   // 5. Persist results to Firestore via batch write
-  const now = new Date().toISOString();
   const batch = db.batch();
+  for (const location of forceUpdatedToday) {
+    batch.update(db.collection("locations").doc(location.id), {
+      last_called: now,
+      updated_at: now,
+    });
+  }
   for (const { location } of callResults) {
     const interp = interpretations.find(
       (i) => i.location_name === location.name,
@@ -334,6 +376,8 @@ async function match_locations(google_places_locs, person, options = {}) {
     batch.update(db.collection("locations").doc(location.id), {
       last_called: now,
       space_available: interp?.space_available ?? null,
+      question_1_answer: interp?.question_1_answer ?? null,
+      question_2_answer: interp?.question_2_answer ?? null,
       updated_at: now,
     });
   }
@@ -350,6 +394,8 @@ async function match_locations(google_places_locs, person, options = {}) {
       updated_at: now,
       space_available: interp?.space_available ?? null,
       call_status: "just_called",
+      question_1_answer: interp?.question_1_answer ?? null,
+      question_2_answer: interp?.question_2_answer ?? null,
       requirements: interp?.requirements ?? null,
       checkin_info: interp?.checkin_info ?? null,
       relevant_notes: interp?.relevant_notes ?? null,
