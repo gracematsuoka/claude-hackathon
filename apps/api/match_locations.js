@@ -24,35 +24,28 @@ function isToday(datetimeStr) {
 
 // ─── DB matching / upserting ──────────────────────────────────────────────────
 
-function findMatchingLocation(googlePlace) {
-  // 1. Match by google_place_id (most reliable)
-  if (googlePlace.place_id) {
-    const row = db
-      .prepare("SELECT * FROM locations WHERE google_place_id = ?")
-      .get(googlePlace.place_id);
-    if (row) return row;
-  }
+// place shape: { latitude, longitude, address, phoneNumber, category }
 
-  const all = db.prepare("SELECT * FROM locations").all();
+async function findMatchingLocation(place) {
+  const all = (await db.collection("locations").get()).docs.map((d) => d.data());
 
-  // 2. Match by normalized address
-  if (googlePlace.formatted_address) {
-    const norm = googlePlace.formatted_address.toLowerCase().trim();
+  // 1. Match by normalized address
+  if (place.address) {
+    const norm = place.address.toLowerCase().trim();
     const row = all.find(
       (loc) => loc.address && loc.address.toLowerCase().trim() === norm
     );
     if (row) return row;
   }
 
-  // 3. Match by coordinates within threshold
-  const lat = googlePlace.geometry?.location?.lat;
-  const lng = googlePlace.geometry?.location?.lng;
-  if (lat != null && lng != null) {
+  // 2. Match by coordinates within threshold
+  if (place.latitude != null && place.longitude != null) {
     const row = all.find(
       (loc) =>
         loc.latitude != null &&
         loc.longitude != null &&
-        haversineKm(lat, lng, loc.latitude, loc.longitude) <= COORDINATE_THRESHOLD_KM
+        haversineKm(place.latitude, place.longitude, loc.latitude, loc.longitude) <=
+          COORDINATE_THRESHOLD_KM
     );
     if (row) return row;
   }
@@ -60,27 +53,29 @@ function findMatchingLocation(googlePlace) {
   return null;
 }
 
-function upsertLocation(googlePlace) {
-  const existing = findMatchingLocation(googlePlace);
+async function upsertLocation(place) {
+  const existing = await findMatchingLocation(place);
   if (existing) return existing;
 
-  const result = db
-    .prepare(
-      `INSERT INTO locations (name, address, phone, latitude, longitude, google_place_id)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      googlePlace.name,
-      googlePlace.formatted_address ?? null,
-      googlePlace.formatted_phone_number ?? null,
-      googlePlace.geometry?.location?.lat ?? null,
-      googlePlace.geometry?.location?.lng ?? null,
-      googlePlace.place_id ?? null
-    );
-
-  return db
-    .prepare("SELECT * FROM locations WHERE id = ?")
-    .get(result.lastInsertRowid);
+  const ref = db.collection("locations").doc();
+  const now = new Date().toISOString();
+  // name is not returned by the Places API response — derive from address as a fallback
+  const location = {
+    id: ref.id,
+    name: place.address ?? "Unknown location",
+    address: place.address ?? null,
+    phone: place.phoneNumber ?? null,
+    latitude: place.latitude ?? null,
+    longitude: place.longitude ?? null,
+    google_place_id: null,
+    category: place.category ?? null,
+    last_called: null,
+    space_available: null,
+    created_at: now,
+    updated_at: now,
+  };
+  await ref.set(location);
+  return location;
 }
 
 // ─── Bland.ai ────────────────────────────────────────────────────────────────
@@ -118,7 +113,7 @@ async function triggerBlandCall(location, person) {
       wait_for_greeting: true,
       record: true,
       language: "en",
-      max_duration: 2, // minutes
+      max_duration: 2,
     }),
   });
 
@@ -158,7 +153,7 @@ async function callLocationViaBland(location, person) {
   return pollForTranscript(callId);
 }
 
-// ─── Claude transcript interpretation ────────────────────────────────────────
+// ─── OpenAI transcript interpretation ────────────────────────────────────────
 
 async function interpretTranscripts(callResults, person) {
   const withTranscripts = callResults.filter((r) => r.transcript);
@@ -205,7 +200,6 @@ Return a JSON array. One object per shelter:
 
   try {
     const parsed = JSON.parse(completion.choices[0].message.content);
-    // GPT with json_object mode returns an object — unwrap array if wrapped
     return Array.isArray(parsed) ? parsed : parsed.shelters ?? parsed.locations ?? [];
   } catch {
     return [];
@@ -215,13 +209,20 @@ Return a JSON array. One object per shelter:
 // ─── Main function ────────────────────────────────────────────────────────────
 
 /**
- * @param {object[]} google_places_locs  - Array of Google Places API result objects
- * @param {object}   person              - { name, gender, message, current_location }
+ * @param {{ count: number, results: { house?: object[], food?: object[] } }} google_places_locs
+ *   The response from /api/places. Each place has: { latitude, longitude, address, phoneNumber }
+ * @param {object} person  - { name, gender, message, current_location }
  * @returns {Promise<{ locations: object[], no_phone: object[] }>}
  */
 async function match_locations(google_places_locs, person) {
-  // 1. Match or create each place in the DB
-  const dbLocations = google_places_locs.map(upsertLocation);
+  // Flatten the categorized results into a single array, tagging each place with its category
+  const { results = {} } = google_places_locs;
+  const places = Object.entries(results).flatMap(([category, arr]) =>
+    (arr ?? []).map((place) => ({ ...place, category }))
+  );
+
+  // 1. Match or create each place in Firestore
+  const dbLocations = await Promise.all(places.map(upsertLocation));
 
   // 2. Split: already called today vs needs a call
   const alreadyCalled = dbLocations.filter((loc) => isToday(loc.last_called));
@@ -240,34 +241,30 @@ async function match_locations(google_places_locs, person) {
     })
   );
 
-  // 4. Interpret transcripts with Claude
+  // 4. Interpret transcripts with OpenAI
   const interpretations = await interpretTranscripts(callResults, person);
 
-  // 5. Persist results to DB
+  // 5. Persist results to Firestore via batch write
   const now = new Date().toISOString();
-  for (const { location, transcript } of callResults) {
-    const interp = interpretations.find(
-      (i) => i.location_name === location.name
-    );
-    db.prepare(
-      `UPDATE locations
-       SET last_called = ?, space_available = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
-    ).run(
-      now,
-      interp?.space_available != null ? (interp.space_available ? 1 : 0) : null,
-      location.id
-    );
+  const batch = db.batch();
+  for (const { location } of callResults) {
+    const interp = interpretations.find((i) => i.location_name === location.name);
+    batch.update(db.collection("locations").doc(location.id), {
+      last_called: now,
+      space_available: interp?.space_available ?? null,
+      updated_at: now,
+    });
   }
+  await batch.commit();
 
-  // 6. Build response
+  // 6. Build response (no re-read needed — merge update fields into in-memory data)
   const justCalled = callResults.map(({ location }) => {
-    const fresh = db
-      .prepare("SELECT * FROM locations WHERE id = ?")
-      .get(location.id);
     const interp = interpretations.find((i) => i.location_name === location.name);
     return {
-      ...fresh,
+      ...location,
+      last_called: now,
+      updated_at: now,
+      space_available: interp?.space_available ?? null,
       call_status: "just_called",
       requirements: interp?.requirements ?? null,
       checkin_info: interp?.checkin_info ?? null,

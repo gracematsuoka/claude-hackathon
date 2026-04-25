@@ -1,22 +1,14 @@
-const Database = require("better-sqlite3");
-const path = require("path");
+const admin = require("firebase-admin");
 
-const db = new Database(path.join(__dirname, "data.db"));
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+    }),
+  });
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS locations (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    name             TEXT NOT NULL,
-    address          TEXT,
-    phone            TEXT,
-    latitude         REAL,
-    longitude        REAL,
-    google_place_id  TEXT UNIQUE,
-    last_called      DATETIME,
-    space_available  INTEGER,
-    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
+const db = admin.firestore();
 module.exports = db;
