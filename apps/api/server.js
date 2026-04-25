@@ -359,19 +359,31 @@ app.post("/api/generate-outline", async (req, res) => {
 
     const locationDetails = allLocations
       .map((loc) => {
-        const status =
-          loc.call_status === "no_phone"
-            ? "No phone number available"
+        const isFood = loc.category === "food";
+        const status = loc.call_status === "no_phone"
+          ? "No phone number available"
+          : isFood
+            ? (loc.question_1_answer ?? "Food availability unknown")
             : loc.space_available === true
               ? "Has space available"
               : loc.space_available === false
                 ? "No space available"
                 : "Availability unknown";
+
+        const question1Label = isFood
+          ? "What food is available?"
+          : "How many beds are available?";
+        const question2Label = isFood
+          ? "When should I come?"
+          : "What time should they arrive for best chance of getting a bed?";
+
         return `### ${loc.name}
 - Address: ${loc.address ?? "Unknown"}
 - Phone: ${loc.phone ?? "N/A"}
 - Category: ${loc.category ?? "Unknown"}
 - Status: ${status}
+- Question 1 (${question1Label}): ${loc.question_1_answer ?? "Unknown"}
+- Question 2 (${question2Label}): ${loc.question_2_answer ?? "Unknown"}
 - Requirements: ${loc.requirements ?? "None listed"}
 - Check-in Info: ${loc.checkin_info ?? "Not provided"}
 - Notes: ${loc.relevant_notes ?? "None"}`;
@@ -379,10 +391,10 @@ app.post("/api/generate-outline", async (req, res) => {
       .join("\n\n");
 
     const systemPrompt = `You are a helpful assistant that creates personalized outlines for people experiencing homelessness.
-Given a list of shelter locations with their availability and details, create a clear, compassionate outline that explains how each location relates to the person's specific needs.
-You must explicitly answer:
-1) "How many beds are available?"
-2) "What time should they arrive for best chance of getting a bed?"
+Given a list of locations with their availability and details, create a clear, compassionate outline that explains how each location relates to the person's specific needs.
+You must include category-specific direct answers in each recommendation:
+- For category food: (1) "What food is available?" (2) "When should I come?"
+- For category shelter/housing: (1) "How many beds are available?" (2) "What time should they arrive for best chance of getting a bed?"
 If the data is missing, clearly say "Unknown".
 Always respond with valid JSON only — no markdown, no explanation.`;
 
@@ -402,7 +414,7 @@ Return a JSON object with this structure:
     {
       "location_name": string,
       "reason": "Why this location is a good fit for the person's needs",
-      "action": "What the person should do next, and include direct answers to: (1) How many beds are available? (2) What time should they arrive for best chance of getting a bed? If unknown, say Unknown."
+      "action": "What the person should do next, and include category-specific direct answers. For food: (1) What food is available? (2) When should I come? For shelter/housing: (1) How many beds are available? (2) What time should they arrive for best chance of getting a bed? If unknown, say Unknown."
     }
   ],
   "general_notes": "Any helpful tips or information for the person"
