@@ -13,8 +13,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, fonts, radius, shadow } from "../theme";
 import type { IntakeData } from "./IntakeModal";
+import { sendChatMessage, type ChatRouteResponse } from "./handlers";
 import { INITIAL_MESSAGES } from "./utils";
-import { sendChatMessage } from "../../../api/handlers";
 
 interface Props {
   intake: IntakeData;
@@ -24,17 +24,6 @@ interface Message {
   id: string;
   role: "bot" | "user";
   text: string;
-}
-
-interface ChatRouteResponse {
-  reasoning?: string;
-  needs?: string[];
-  message?: string;
-  dispatch?: boolean;
-  error?: string;
-  status: number;
-  ok: boolean;
-  rawBody: string;
 }
 
 const FALLBACK_ERROR_MESSAGE =

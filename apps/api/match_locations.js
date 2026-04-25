@@ -1,5 +1,4 @@
 const OpenAI = require("openai");
-const db = require("./db");
 
 const COORDINATE_THRESHOLD_KM = 0.1; // 100 meters
 
@@ -27,7 +26,9 @@ function isToday(datetimeStr) {
 // place shape: { latitude, longitude, address, phoneNumber, category }
 
 async function findMatchingLocation(place) {
-  const all = (await db.collection("locations").get()).docs.map((d) => d.data());
+  const all = (await db.collection("locations").get()).docs.map((d) =>
+    d.data(),
+  );
 
   // 1. Match by Google Place ID (most reliable)
   if (place.placeId) {
@@ -39,7 +40,7 @@ async function findMatchingLocation(place) {
   if (place.address) {
     const norm = place.address.toLowerCase().trim();
     const row = all.find(
-      (loc) => loc.address && loc.address.toLowerCase().trim() === norm
+      (loc) => loc.address && loc.address.toLowerCase().trim() === norm,
     );
     if (row) return row;
   }
@@ -50,8 +51,12 @@ async function findMatchingLocation(place) {
       (loc) =>
         loc.latitude != null &&
         loc.longitude != null &&
-        haversineKm(place.latitude, place.longitude, loc.latitude, loc.longitude) <=
-          COORDINATE_THRESHOLD_KM
+        haversineKm(
+          place.latitude,
+          place.longitude,
+          loc.latitude,
+          loc.longitude,
+        ) <= COORDINATE_THRESHOLD_KM,
     );
     if (row) return row;
   }
@@ -88,7 +93,9 @@ async function upsertLocation(place) {
 
 function buildBlandPrompt(person) {
   // TODO: finalize prompt wording with team
-  const genderPhrase = person.gender ? `a ${person.gender} individual` : "an individual";
+  const genderPhrase = person.gender
+    ? `a ${person.gender} individual`
+    : "an individual";
   return `You are calling a homeless shelter on behalf of someone in need of shelter tonight.
 
 If the person who answers speaks a language other than English, please communicate with them in their language.
@@ -170,7 +177,7 @@ async function interpretTranscripts(callResults, person) {
   const transcriptBlock = withTranscripts
     .map(
       ({ location, transcript }) =>
-        `### ${location.name}\nPhone: ${location.phone}\nTranscript:\n${JSON.stringify(transcript, null, 2)}`
+        `### ${location.name}\nPhone: ${location.phone}\nTranscript:\n${JSON.stringify(transcript, null, 2)}`,
     )
     .join("\n\n---\n\n");
 
@@ -206,7 +213,9 @@ Return a JSON array. One object per shelter:
 
   try {
     const parsed = JSON.parse(completion.choices[0].message.content);
-    return Array.isArray(parsed) ? parsed : parsed.shelters ?? parsed.locations ?? [];
+    return Array.isArray(parsed)
+      ? parsed
+      : (parsed.shelters ?? parsed.locations ?? []);
   } catch {
     return [];
   }
@@ -224,7 +233,7 @@ async function match_locations(google_places_locs, person) {
   // Flatten the categorized results into a single array, tagging each place with its category
   const { results = {} } = google_places_locs;
   const places = Object.entries(results).flatMap(([category, arr]) =>
-    (arr ?? []).map((place) => ({ ...place, category }))
+    (arr ?? []).map((place) => ({ ...place, category })),
   );
 
   // 1. Match or create each place in Firestore
@@ -233,10 +242,10 @@ async function match_locations(google_places_locs, person) {
   // 2. Split: already called today vs needs a call
   const alreadyCalled = dbLocations.filter((loc) => isToday(loc.last_called));
   const needsCalling = dbLocations.filter(
-    (loc) => !isToday(loc.last_called) && loc.phone
+    (loc) => !isToday(loc.last_called) && loc.phone,
   );
   const noPhone = dbLocations.filter(
-    (loc) => !isToday(loc.last_called) && !loc.phone
+    (loc) => !isToday(loc.last_called) && !loc.phone,
   );
 
   // 3. Call locations that need it via Bland.ai (parallel)
@@ -244,7 +253,7 @@ async function match_locations(google_places_locs, person) {
     needsCalling.map(async (location) => {
       const transcript = await callLocationViaBland(location, person);
       return { location, transcript };
-    })
+    }),
   );
 
   // 4. Interpret transcripts with OpenAI
@@ -254,7 +263,9 @@ async function match_locations(google_places_locs, person) {
   const now = new Date().toISOString();
   const batch = db.batch();
   for (const { location } of callResults) {
-    const interp = interpretations.find((i) => i.location_name === location.name);
+    const interp = interpretations.find(
+      (i) => i.location_name === location.name,
+    );
     batch.update(db.collection("locations").doc(location.id), {
       last_called: now,
       space_available: interp?.space_available ?? null,
@@ -265,7 +276,9 @@ async function match_locations(google_places_locs, person) {
 
   // 6. Build response (no re-read needed — merge update fields into in-memory data)
   const justCalled = callResults.map(({ location }) => {
-    const interp = interpretations.find((i) => i.location_name === location.name);
+    const interp = interpretations.find(
+      (i) => i.location_name === location.name,
+    );
     return {
       ...location,
       last_called: now,
