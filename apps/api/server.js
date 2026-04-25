@@ -105,7 +105,7 @@ app.get("/api/message", (_req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { message } = req.body ?? {};
+  const { message, language } = req.body ?? {};
 
   if (typeof message !== "string" || !message.trim()) {
     return res.status(400).json({
@@ -113,9 +113,25 @@ app.post("/api/chat", async (req, res) => {
     });
   }
 
+  if (language != null && (typeof language !== "string" || !language.trim())) {
+    return res.status(400).json({
+      error: "'language' must be a non-empty string when provided.",
+    });
+  }
+
+  if (language != null && (typeof language !== "string" || !language.trim())) {
+    return res.status(400).json({
+      error: "'language' must be a non-empty string when provided.",
+    });
+  }
+
   try {
-    const reply = await generateChatResponse({ message: message.trim() });
-    return res.json({ reply });
+    const chat = await generateChatResponse({
+      message: message.trim(),
+      language: language?.trim(),
+    });
+
+    return res.status(200).json(chat);
   } catch (error) {
     console.error("Chat request failed:", error);
     return res.status(error.statusCode || 500).json({
@@ -149,6 +165,14 @@ app.get("/api/places", async (req, res) => {
   }
 });
 
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`API running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
+// Locations CRUD
 app.get("/api/locations", async (_req, res) => {
   const locations = await getStoredLocations();
   res.json(locations);
@@ -313,7 +337,8 @@ app.post("/api/generate-outline", async (req, res) => {
 
   if (!matchResult || !person?.message) {
     return res.status(400).json({
-      error: "matchResult (from /api/match-locations) and person.message are required",
+      error:
+        "matchResult (from /api/match-locations) and person.message are required",
     });
   }
 
@@ -327,7 +352,9 @@ app.post("/api/generate-outline", async (req, res) => {
     const allLocations = [...locations, ...no_phone];
 
     if (!allLocations.length) {
-      return res.json({ outline: "No locations available to generate an outline." });
+      return res.json({
+        outline: "No locations available to generate an outline.",
+      });
     }
 
     const locationDetails = allLocations
@@ -340,7 +367,6 @@ app.post("/api/generate-outline", async (req, res) => {
               : loc.space_available === false
                 ? "No space available"
                 : "Availability unknown";
-
         return `### ${loc.name}
 - Address: ${loc.address ?? "Unknown"}
 - Phone: ${loc.phone ?? "N/A"}
@@ -354,7 +380,11 @@ app.post("/api/generate-outline", async (req, res) => {
 
     const systemPrompt = `You are a helpful assistant that creates personalized outlines for people experiencing homelessness.
 Given a list of shelter locations with their availability and details, create a clear, compassionate outline that explains how each location relates to the person's specific needs.
-Always respond with valid JSON only - no markdown, no explanation.`;
+You must explicitly answer:
+1) "How many beds are available?"
+2) "What time should they arrive for best chance of getting a bed?"
+If the data is missing, clearly say "Unknown".
+Always respond with valid JSON only — no markdown, no explanation.`;
 
     const userPrompt = `Person seeking shelter:
 - Name: ${person.name ?? "Unknown"}
@@ -372,7 +402,7 @@ Return a JSON object with this structure:
     {
       "location_name": string,
       "reason": "Why this location is a good fit for the person's needs",
-      "action": "What the person should do next (call, go there, etc.)"
+      "action": "What the person should do next, and include direct answers to: (1) How many beds are available? (2) What time should they arrive for best chance of getting a bed? If unknown, say Unknown."
     }
   ],
   "general_notes": "Any helpful tips or information for the person"
@@ -393,6 +423,25 @@ Return a JSON object with this structure:
     console.error("generate-outline error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
+
+  // Returns something like this
+  //   "outline": {
+  //     "summary": "Overview of options",
+  //     "recommendations": [
+  //       {
+  //         "location_name": "Shelter A",
+  //         "reason": "Why it's a good fit",
+  //         "action": "What to do next"
+  //       },
+  //       {
+  //         "location_name": "Shelter B",
+  //         "reason": "Why it's a good fit",
+  //         "action": "What to do next"
+  //       }
+  //     ],
+  //     "general_notes": "Tips for the person"
+  //   }
+  // }
 });
 
 app.listen(PORT, () => {
