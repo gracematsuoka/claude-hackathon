@@ -13,7 +13,13 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, fonts, radius, shadow } from "../theme";
 import type { IntakeData } from "./IntakeModal";
-import { sendChatMessage, type ChatRouteResponse } from "./handlers";
+import {
+  generateOutline,
+  getPlaces,
+  matchLocations,
+  sendChatMessage,
+  type ChatRouteResponse,
+} from "./handlers";
 import { INITIAL_MESSAGES } from "./utils";
 
 interface Props {
@@ -28,6 +34,7 @@ interface Message {
 
 const FALLBACK_ERROR_MESSAGE =
   "I had trouble reaching Haven just now. Please try again in a moment.";
+const METERS_PER_MILE = 1609.34;
 
 const getInitialMessage = (language: string) =>
   INITIAL_MESSAGES[language] ?? INITIAL_MESSAGES.English;
@@ -79,11 +86,96 @@ export const ChatInterface = ({ intake }: Props) => {
   const [responses, setResponses] = useState<ChatRouteResponse[]>([]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
+  const [isDispatching, setIsDispatching] = useState(false);
   const listRef = useRef<FlatList>(null);
+  const lastDispatchedResponseRef = useRef<ChatRouteResponse | null>(null);
 
   useEffect(() => {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
   }, [messages, typing]);
+
+  useEffect(() => {
+    const latestResponse = responses[responses.length - 1];
+
+    if (!latestResponse?.dispatch) return;
+    if (lastDispatchedResponseRef.current === latestResponse) return;
+
+    lastDispatchedResponseRef.current = latestResponse;
+    setIsDispatching(true);
+
+    const runDispatchFlow = async () => {
+      if (!intake.currentLocation) {
+        throw new Error("Current location is required to fetch places.");
+      }
+
+      // const placesResponse = await getPlaces({
+      //   latitude: intake.currentLocation.latitude,
+      //   longitude: intake.currentLocation.longitude,
+      //   radius: intake.distance * METERS_PER_MILE,
+      //   isHome: true,
+      // });
+
+      // if (!placesResponse.ok || !placesResponse.results) {
+      //   throw new Error(placesResponse.error || "Failed to fetch places.");
+      // }
+
+      const person = {
+        ...intake,
+        message: intake.need,
+        current_location: intake.currentLocation?.label ?? null,
+      } as Record<string, unknown>;
+      // const sourcePlace =
+      //   placesResponse.results.housing?.[0] ?? placesResponse.results.food?.[0];
+
+      // if (!sourcePlace) {
+      //   throw new Error("Failed to find a place to use for testing.");
+      // }
+
+      const testPlace = {
+        name: "Test Shelter",
+        placeId: "test-place-001",
+        latitude: intake.currentLocation?.latitude ?? null,
+        longitude: intake.currentLocation?.longitude ?? null,
+        address: intake.currentLocation?.label ?? "Test Address",
+        phoneNumber: "+17342639095",
+      };
+
+      const matchLocationsResponse = await matchLocations({
+        google_places_locs: {
+          count: 1,
+          results: {
+            housing: [testPlace],
+          },
+        },
+        person,
+        forceCall: true,
+      });
+
+      if (!matchLocationsResponse.ok || !matchLocationsResponse.result) {
+        throw new Error(
+          matchLocationsResponse.error || "Failed to match locations.",
+        );
+      }
+
+      const outlineResponse = await generateOutline({
+        matchResult: matchLocationsResponse.result,
+        person,
+      });
+
+      if (!outlineResponse.ok) {
+        throw new Error(outlineResponse.error || "Failed to generate outline.");
+      }
+    };
+
+    runDispatchFlow()
+      .catch((error) => {
+        console.error("Dispatch flow failed:", error);
+      })
+      .finally(() => {
+        setIsDispatching(false);
+        setTyping(false);
+      });
+  }, [intake, responses]);
 
   const sendMessage = async (text: string) => {
     const trimmed = text.trim();
@@ -126,6 +218,10 @@ export const ChatInterface = ({ intake }: Props) => {
           text: routeResponse.message!.trim(),
         },
       ]);
+
+      if (!routeResponse.dispatch) {
+        setTyping(false);
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error && error.message
@@ -136,8 +232,9 @@ export const ChatInterface = ({ intake }: Props) => {
         ...m,
         { id: `${Date.now()}-b`, role: "bot", text: errorMessage },
       ]);
-    } finally {
+
       setTyping(false);
+      setIsDispatching(false);
     }
   };
 
@@ -165,7 +262,9 @@ export const ChatInterface = ({ intake }: Props) => {
             <Text style={styles.headerTitle}>Haven</Text>
             <Text style={styles.headerMeta}>
               {intake.distance} mi · {intake.language}
-              {intake.currentLocation ? ` · ${intake.currentLocation.label}` : ''}
+              {intake.currentLocation
+                ? ` · ${intake.currentLocation.label}`
+                : ""}
             </Text>
           </View>
         </View>
@@ -224,13 +323,17 @@ export const ChatInterface = ({ intake }: Props) => {
             placeholderTextColor={colors.mutedForeground}
             style={styles.composerInput}
             maxLength={500}
+            editable={!typing && !isDispatching}
             onSubmitEditing={() => sendMessage(input)}
             returnKeyType="send"
           />
           <Pressable
             onPress={() => sendMessage(input)}
-            disabled={!input.trim()}
-            style={[styles.sendBtn, !input.trim() && { opacity: 0.3 }]}
+            disabled={!input.trim() || typing || isDispatching}
+            style={[
+              styles.sendBtn,
+              (!input.trim() || typing || isDispatching) && { opacity: 0.3 },
+            ]}
           >
             <Text style={styles.sendArrow}>↑</Text>
           </Pressable>

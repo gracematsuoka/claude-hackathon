@@ -22,6 +22,24 @@ function isToday(datetimeStr) {
   return new Date(datetimeStr).toDateString() === new Date().toDateString();
 }
 
+function normalizePhoneNumber(phone) {
+  if (!phone || typeof phone !== "string") return null;
+
+  const trimmed = phone.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("+")) return trimmed;
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+
+  return trimmed;
+}
+
 // ─── DB matching / upserting ──────────────────────────────────────────────────
 
 // place shape: { latitude, longitude, address, phoneNumber, category }
@@ -67,7 +85,47 @@ async function findMatchingLocation(place) {
 
 async function upsertLocation(place) {
   const existing = await findMatchingLocation(place);
-  if (existing) return existing;
+  if (existing) {
+    const updates = {};
+
+    const normalizedPhone = normalizePhoneNumber(place.phoneNumber);
+
+    if (normalizedPhone && normalizedPhone !== existing.phone) {
+      updates.phone = normalizedPhone;
+    }
+    if (place.name && place.name !== existing.name) {
+      updates.name = place.name;
+    }
+    if (place.address && place.address !== existing.address) {
+      updates.address = place.address;
+    }
+    if (place.placeId && place.placeId !== existing.google_place_id) {
+      updates.google_place_id = place.placeId;
+    }
+    if (place.category && place.category !== existing.category) {
+      updates.category = place.category;
+    }
+    if (
+      place.latitude != null &&
+      place.latitude !== existing.latitude
+    ) {
+      updates.latitude = place.latitude;
+    }
+    if (
+      place.longitude != null &&
+      place.longitude !== existing.longitude
+    ) {
+      updates.longitude = place.longitude;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updates.updated_at = new Date().toISOString();
+      await db.collection("locations").doc(existing.id).update(updates);
+      return { ...existing, ...updates };
+    }
+
+    return existing;
+  }
 
   const ref = db.collection("locations").doc();
   const now = new Date().toISOString();
@@ -76,7 +134,7 @@ async function upsertLocation(place) {
     id: ref.id,
     name: place.name ?? place.address ?? "Unknown location",
     address: place.address ?? null,
-    phone: place.phoneNumber ?? null,
+    phone: normalizePhoneNumber(place.phoneNumber),
     latitude: place.latitude ?? null,
     longitude: place.longitude ?? null,
     google_place_id: place.placeId ?? null,
@@ -115,6 +173,8 @@ Thank them and end the call.`;
 }
 
 async function triggerBlandCall(location, person) {
+  const phoneNumber = normalizePhoneNumber(location.phone);
+
   const res = await fetch("https://api.bland.ai/v1/calls", {
     method: "POST",
     headers: {
@@ -122,7 +182,7 @@ async function triggerBlandCall(location, person) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      phone_number: location.phone,
+      phone_number: phoneNumber,
       task: buildBlandPrompt(person),
       voice: "nat",
       wait_for_greeting: true,
@@ -231,7 +291,7 @@ Return a JSON array. One object per shelter:
  * @param {object} person  - { name, gender, message, current_location }
  * @returns {Promise<{ locations: object[], no_phone: object[] }>}
  */
-async function match_locations(google_places_locs, person) {
+async function match_locations(google_places_locs, person, options = {}) {
   // Flatten the categorized results into a single array, tagging each place with its category
   const { results = {} } = google_places_locs;
   const places = Object.entries(results).flatMap(([category, arr]) =>
@@ -240,14 +300,17 @@ async function match_locations(google_places_locs, person) {
 
   // 1. Match or create each place in Firestore
   const dbLocations = await Promise.all(places.map(upsertLocation));
+  const forceCall = options.forceCall === true;
 
   // 2. Split: already called today vs needs a call
-  const alreadyCalled = dbLocations.filter((loc) => isToday(loc.last_called));
+  const alreadyCalled = dbLocations.filter(
+    (loc) => !forceCall && isToday(loc.last_called),
+  );
   const needsCalling = dbLocations.filter(
-    (loc) => !isToday(loc.last_called) && loc.phone,
+    (loc) => (forceCall || !isToday(loc.last_called)) && loc.phone,
   );
   const noPhone = dbLocations.filter(
-    (loc) => !isToday(loc.last_called) && !loc.phone,
+    (loc) => (forceCall || !isToday(loc.last_called)) && !loc.phone,
   );
 
   // 3. Call locations that need it via Bland.ai (parallel)
