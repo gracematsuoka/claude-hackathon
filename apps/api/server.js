@@ -240,6 +240,10 @@ app.post("/api/generate-outline", async (req, res) => {
 
     const systemPrompt = `You are a helpful assistant that creates personalized outlines for people experiencing homelessness.
 Given a list of shelter locations with their availability and details, create a clear, compassionate outline that explains how each location relates to the person's specific needs.
+You must explicitly answer:
+1) "How many beds are available?"
+2) "What time should they arrive for best chance of getting a bed?"
+If the data is missing, clearly say "Unknown".
 Always respond with valid JSON only — no markdown, no explanation.`;
 
     const userPrompt = `Person seeking shelter:
@@ -258,7 +262,7 @@ Return a JSON object with this structure:
     {
       "location_name": string,
       "reason": "Why this location is a good fit for the person's needs",
-      "action": "What the person should do next (call, go there, etc.)"
+      "action": "What the person should do next, and include direct answers to: (1) How many beds are available? (2) What time should they arrive for best chance of getting a bed? If unknown, say Unknown."
     }
   ],
   "general_notes": "Any helpful tips or information for the person"

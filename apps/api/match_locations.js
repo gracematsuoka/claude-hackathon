@@ -1,4 +1,5 @@
 const OpenAI = require("openai");
+const { db } = require("./firebase");
 
 const COORDINATE_THRESHOLD_KM = 0.1; // 100 meters
 
@@ -98,16 +99,17 @@ function buildBlandPrompt(person) {
     : "an individual";
   return `You are calling a homeless shelter on behalf of someone in need of shelter tonight.
 
-If the person who answers speaks a language other than English, please communicate with them in their language.
+You are calling on behalf of a non-English speaker. If the person who answers speaks a language other than English, please communicate with them in their language.
 
 You are calling on behalf of ${genderPhrase} named ${person.name ?? "someone"}. Their message is:
 "${person.message}"
 
 Please:
-1. Ask if they currently have space available tonight for ${genderPhrase}.
-2. Ask about any gender-specific, age, or sobriety requirements.
-3. Ask for the best way to arrive or check in.
-4. Be polite, brief, and clear.
+1. Ask exactly: "How many beds are available?"
+2. Ask exactly: "What time should they arrive for best chance of getting a bed?"
+3. Ask about any gender-specific, age, or sobriety requirements.
+4. Ask for the best way to arrive or check in.
+5. Be polite, brief, and clear.
 
 Thank them and end the call.`;
 }
