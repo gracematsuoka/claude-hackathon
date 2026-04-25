@@ -1,3 +1,6 @@
+const { db, FieldValue } = require("./firebase");
+const { match_locations } = require("./match_locations");
+
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
