@@ -15,6 +15,7 @@ interface RequestOptions {
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
+
 function getApiUrl(): string {
   if (!API_URL) {
     throw new Error("EXPO_PUBLIC_API_URL is not configured.");
