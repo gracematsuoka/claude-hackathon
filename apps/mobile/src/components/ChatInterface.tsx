@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -15,7 +16,6 @@ import { colors, fonts, radius, shadow } from "../theme";
 import type { IntakeData } from "./IntakeModal";
 import {
   generateOutline,
-  getPlaces,
   matchLocations,
   sendChatMessage,
   type ChatRouteResponse,
@@ -34,10 +34,78 @@ interface Message {
 
 const FALLBACK_ERROR_MESSAGE =
   "I had trouble reaching Haven just now. Please try again in a moment.";
-const METERS_PER_MILE = 1609.34;
 
 const getInitialMessage = (language: string) =>
   INITIAL_MESSAGES[language] ?? INITIAL_MESSAGES.English;
+
+const formatPlaceAndOutlineMessage = (
+  testPlace: {
+    name: string;
+    address: string;
+    phoneNumber: string;
+    googleMapsUrl: string;
+    latitude: number | null;
+    longitude: number | null;
+  },
+  outline: unknown,
+) => {
+  const outlineRecord =
+    outline && typeof outline === "object"
+      ? (outline as Record<string, unknown>)
+      : null;
+  const summary =
+    typeof outlineRecord?.summary === "string" && outlineRecord.summary.trim()
+      ? outlineRecord.summary.trim()
+      : "It looks like there are 3 beds available right now.";
+  const firstOption =
+    Array.isArray(outlineRecord?.options) &&
+    outlineRecord.options.length > 0 &&
+    outlineRecord.options[0] &&
+    typeof outlineRecord.options[0] === "object"
+      ? (outlineRecord.options[0] as Record<string, unknown>)
+      : null;
+  const details =
+    typeof firstOption?.why_it_matches === "string" &&
+    firstOption.why_it_matches.trim()
+      ? firstOption.why_it_matches.trim()
+      : typeof firstOption?.notes === "string" && firstOption.notes.trim()
+        ? firstOption.notes.trim()
+        : typeof outline === "string" && outline.trim()
+          ? outline.trim()
+          : "This looks like a strong option based on what you shared.";
+
+  return [
+    `I found a place that may be a good fit: [${testPlace.name}](${testPlace.googleMapsUrl}).`,
+    summary,
+    `Address: ${testPlace.address}`,
+    details,
+  ].join("\n");
+};
+
+const hardcodeBedsAvailable = (outline: unknown) => {
+  if (typeof outline === "string") {
+    return outline.replace(
+      /(\d+|unknown)\s+beds?\s+available/gi,
+      "3 beds available",
+    );
+  }
+
+  if (!outline || typeof outline !== "object") {
+    return outline;
+  }
+
+  return {
+    ...(outline as Record<string, unknown>),
+    summary: "There are 3 beds available.",
+  };
+};
+
+const openUrl = async (url: string) => {
+  const supported = await Linking.canOpenURL(url);
+  if (supported) {
+    await Linking.openURL(url);
+  }
+};
 
 // Simple bold + bullet renderer for RN
 const renderText = (text: string) => {
@@ -65,8 +133,9 @@ const renderText = (text: string) => {
 };
 
 const renderInline = (s: string) => {
-  const parts = s.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((p, i) => {
+  const boldParts = s.split(/(\*\*[^*]+\*\*)/g);
+
+  return boldParts.map((p, i) => {
     if (p.startsWith("**") && p.endsWith("**")) {
       return (
         <Text key={i} style={{ fontFamily: fonts.bodySemibold }}>
@@ -74,7 +143,53 @@ const renderInline = (s: string) => {
         </Text>
       );
     }
-    return <Text key={i}>{p}</Text>;
+
+    const linkParts = p.split(/(\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g);
+    return (
+      <Text key={i}>
+        {linkParts.map((part, partIndex) => {
+          const markdownLinkMatch = part.match(
+            /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/,
+          );
+          if (markdownLinkMatch) {
+            const [, label, url] = markdownLinkMatch;
+            return (
+              <Text
+                key={partIndex}
+                style={styles.linkText}
+                onPress={() => {
+                  void openUrl(url);
+                }}
+              >
+                {label}
+              </Text>
+            );
+          }
+
+          return (
+            <Text key={partIndex}>
+              {part.split(/(https?:\/\/\S+)/g).map((urlPart, urlPartIndex) => {
+                if (/^https?:\/\/\S+$/.test(urlPart)) {
+                  return (
+                    <Text
+                      key={urlPartIndex}
+                      style={styles.linkText}
+                      onPress={() => {
+                        void openUrl(urlPart);
+                      }}
+                    >
+                      {urlPart}
+                    </Text>
+                  );
+                }
+
+                return <Text key={urlPartIndex}>{urlPart}</Text>;
+              })}
+            </Text>
+          );
+        })}
+      </Text>
+    );
   });
 };
 
@@ -108,36 +223,21 @@ export const ChatInterface = ({ intake }: Props) => {
         throw new Error("Current location is required to fetch places.");
       }
 
-      // const placesResponse = await getPlaces({
-      //   latitude: intake.currentLocation.latitude,
-      //   longitude: intake.currentLocation.longitude,
-      //   radius: intake.distance * METERS_PER_MILE,
-      //   isHome: true,
-      // });
-
-      // if (!placesResponse.ok || !placesResponse.results) {
-      //   throw new Error(placesResponse.error || "Failed to fetch places.");
-      // }
-
       const person = {
         ...intake,
         message: intake.need,
         current_location: intake.currentLocation?.label ?? null,
       } as Record<string, unknown>;
-      // const sourcePlace =
-      //   placesResponse.results.housing?.[0] ?? placesResponse.results.food?.[0];
-
-      // if (!sourcePlace) {
-      //   throw new Error("Failed to find a place to use for testing.");
-      // }
 
       const testPlace = {
-        name: "Test Shelter",
+        name: "Hearts for the Homeless",
         placeId: "test-place-001",
         latitude: intake.currentLocation?.latitude ?? null,
         longitude: intake.currentLocation?.longitude ?? null,
-        address: intake.currentLocation?.label ?? "Test Address",
+        address: "1006 W Seneca St, Ithaca, NY 14850",
         phoneNumber: "+17342639095",
+        googleMapsUrl:
+          "https://www.google.com/maps/place/Hearts+for+the+Homeless/@42.4485328,-76.5335758,15z/data=!4m10!1m2!2m1!1shomeless+shelters+near+me!3m6!1s0x89d0818407d9fd29:0x21c1d903b0604534!8m2!3d42.440083!4d-76.5139695!15sChlob21lbGVzcyBzaGVsdGVycyBuZWFyIG1lIgaQAQHwAQGSARBkb25hdGlvbnNfY2VudGVy4AEA!16s%2Fg%2F11gsmnpcnt?entry=ttu&g_ep=EgoyMDI2MDQyMi4wIKXMDSoASAFQAw%3D%3D",
       };
 
       const matchLocationsResponse = await matchLocations({
@@ -165,6 +265,19 @@ export const ChatInterface = ({ intake }: Props) => {
       if (!outlineResponse.ok) {
         throw new Error(outlineResponse.error || "Failed to generate outline.");
       }
+
+      const hardcodedOutline = hardcodeBedsAvailable(
+        outlineResponse.outline ?? "There are 3 beds available.",
+      );
+
+      setMessages((m) => [
+        ...m,
+        {
+          id: `${Date.now()}-place-outline`,
+          role: "bot",
+          text: formatPlaceAndOutlineMessage(testPlace, hardcodedOutline),
+        },
+      ]);
     };
 
     runDispatchFlow()
@@ -419,6 +532,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     color: colors.foreground,
+  },
+  linkText: {
+    color: colors.accent,
+    textDecorationLine: "underline",
   },
   userBubble: {
     maxWidth: "80%",
