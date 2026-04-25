@@ -29,7 +29,13 @@ function isToday(datetimeStr) {
 async function findMatchingLocation(place) {
   const all = (await db.collection("locations").get()).docs.map((d) => d.data());
 
-  // 1. Match by normalized address
+  // 1. Match by Google Place ID (most reliable)
+  if (place.placeId) {
+    const row = all.find((loc) => loc.google_place_id === place.placeId);
+    if (row) return row;
+  }
+
+  // 2. Match by normalized address
   if (place.address) {
     const norm = place.address.toLowerCase().trim();
     const row = all.find(
@@ -38,7 +44,7 @@ async function findMatchingLocation(place) {
     if (row) return row;
   }
 
-  // 2. Match by coordinates within threshold
+  // 3. Match by coordinates within threshold
   if (place.latitude != null && place.longitude != null) {
     const row = all.find(
       (loc) =>
@@ -59,15 +65,15 @@ async function upsertLocation(place) {
 
   const ref = db.collection("locations").doc();
   const now = new Date().toISOString();
-  // name is not returned by the Places API response — derive from address as a fallback
+  // Use Google Places name if available, fallback to address-derived name
   const location = {
     id: ref.id,
-    name: place.address ?? "Unknown location",
+    name: place.name ?? place.address ?? "Unknown location",
     address: place.address ?? null,
     phone: place.phoneNumber ?? null,
     latitude: place.latitude ?? null,
     longitude: place.longitude ?? null,
-    google_place_id: null,
+    google_place_id: place.placeId ?? null,
     category: place.category ?? null,
     last_called: null,
     space_available: null,

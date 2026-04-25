@@ -149,6 +149,111 @@ app.post("/api/match-locations", async (req, res) => {
   }
 });
 
+// Generate personalized outline describing how each location relates to user needs
+app.post("/api/generate-outline", async (req, res) => {
+  const OpenAI = require("openai");
+  const { matchResult, person } = req.body;
+
+  if (!matchResult || !person?.message) {
+    return res.status(400).json({
+      error: "matchResult (from /api/match-locations) and person.message are required",
+    });
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(500).json({ error: "OPENAI_API_KEY is not configured." });
+  }
+
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const { locations = [], no_phone = [] } = matchResult;
+    const allLocations = [...locations, ...no_phone];
+
+    if (!allLocations.length) {
+      return res.json({ outline: "No locations available to generate an outline." });
+    }
+
+    // Build location details for the prompt
+    const locationDetails = allLocations
+      .map((loc) => {
+        const status = loc.call_status === "no_phone" ? "No phone number available" :
+          loc.space_available === true ? "Has space available" :
+          loc.space_available === false ? "No space available" :
+          "Availability unknown";
+        return `### ${loc.name}
+- Address: ${loc.address ?? "Unknown"}
+- Phone: ${loc.phone ?? "N/A"}
+- Category: ${loc.category ?? "Unknown"}
+- Status: ${status}
+- Requirements: ${loc.requirements ?? "None listed"}
+- Check-in Info: ${loc.checkin_info ?? "Not provided"}
+- Notes: ${loc.relevant_notes ?? "None"}`;
+      })
+      .join("\n\n");
+
+    const systemPrompt = `You are a helpful assistant that creates personalized outlines for people experiencing homelessness.
+Given a list of shelter locations with their availability and details, create a clear, compassionate outline that explains how each location relates to the person's specific needs.
+Always respond with valid JSON only — no markdown, no explanation.`;
+
+    const userPrompt = `Person seeking shelter:
+- Name: ${person.name ?? "Unknown"}
+- Gender: ${person.gender ?? "Not specified"}
+- Specific needs/message: ${person.message}
+- Current location: ${person.current_location ?? "Unknown"}
+
+Available locations:
+${locationDetails}
+
+Return a JSON object with this structure:
+{
+  "summary": "A brief overview of the options available",
+  "recommendations": [
+    {
+      "location_name": string,
+      "reason": "Why this location is a good fit for the person's needs",
+      "action": "What the person should do next (call, go there, etc.)"
+    }
+  ],
+  "general_notes": "Any helpful tips or information for the person"
+}`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    });
+
+    const parsed = JSON.parse(completion.choices[0].message.content);
+    res.json({ outline: parsed });
+  } catch (err) {
+    console.error("generate-outline error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+
+// Returns something like this
+//   "outline": {
+//     "summary": "Overview of options",
+//     "recommendations": [
+//       {
+//         "location_name": "Shelter A",
+//         "reason": "Why it's a good fit",
+//         "action": "What to do next"
+//       },
+//       {
+//         "location_name": "Shelter B",
+//         "reason": "Why it's a good fit",
+//         "action": "What to do next"
+//       }
+//     ],
+//     "general_notes": "Tips for the person"
+//   }
+// }
+});
+
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
 });
