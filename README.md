@@ -39,6 +39,7 @@ cp apps/mobile/.env.example apps/mobile/.env
 
 ```env
 PORT=4000
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 ```
 
 ### `apps/mobile/.env`
@@ -91,6 +92,14 @@ Sample API response:
 ```bash
 curl http://localhost:4000/api/message
 ```
+
+Google Places lookup:
+
+```bash
+curl "http://localhost:4000/api/places?latitude=40.7128&longitude=-74.0060&radius=1500&filter=housing"
+```
+
+You can also use `filter=food%20shelter` or `filter=food_shelter`.
 
 ## Running the Expo App
 
