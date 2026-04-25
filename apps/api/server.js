@@ -1,8 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-const db = require("./db");
-const { match_locations } = require("./match_locations");
 const { generateChatResponse } = require("./src/services/llm");
 const { searchPlacesByFilter } = require("./src/services/googlePlaces");
 const { db } = require("./firebase");
@@ -23,7 +21,7 @@ app.get("/api/message", (_req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { message } = req.body ?? {};
+  const { message, language } = req.body ?? {};
 
   if (typeof message !== "string" || !message.trim()) {
     return res.status(400).json({
@@ -31,10 +29,19 @@ app.post("/api/chat", async (req, res) => {
     });
   }
 
-  try {
-    const reply = await generateChatResponse({ message: message.trim() });
+  if (language != null && (typeof language !== "string" || !language.trim())) {
+    return res.status(400).json({
+      error: "'language' must be a non-empty string when provided.",
+    });
+  }
 
-    return res.json({ reply });
+  try {
+    const chat = await generateChatResponse({
+      message: message.trim(),
+      language: language?.trim(),
+    });
+
+    return res.status(200).json(chat);
   } catch (error) {
     console.error("Chat request failed:", error);
 
@@ -95,6 +102,13 @@ app.get("/api/places", async (req, res) => {
   // }}
 });
 
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`API running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
 // Locations CRUD
 app.get("/api/locations", async (_req, res) => {
   const snap = await db.collection("locations").get();
@@ -181,7 +195,8 @@ app.post("/api/generate-outline", async (req, res) => {
 
   if (!matchResult || !person?.message) {
     return res.status(400).json({
-      error: "matchResult (from /api/match-locations) and person.message are required",
+      error:
+        "matchResult (from /api/match-locations) and person.message are required",
     });
   }
 
@@ -196,16 +211,22 @@ app.post("/api/generate-outline", async (req, res) => {
     const allLocations = [...locations, ...no_phone];
 
     if (!allLocations.length) {
-      return res.json({ outline: "No locations available to generate an outline." });
+      return res.json({
+        outline: "No locations available to generate an outline.",
+      });
     }
 
     // Build location details for the prompt
     const locationDetails = allLocations
       .map((loc) => {
-        const status = loc.call_status === "no_phone" ? "No phone number available" :
-          loc.space_available === true ? "Has space available" :
-          loc.space_available === false ? "No space available" :
-          "Availability unknown";
+        const status =
+          loc.call_status === "no_phone"
+            ? "No phone number available"
+            : loc.space_available === true
+              ? "Has space available"
+              : loc.space_available === false
+                ? "No space available"
+                : "Availability unknown";
         return `### ${loc.name}
 - Address: ${loc.address ?? "Unknown"}
 - Phone: ${loc.phone ?? "N/A"}
@@ -259,24 +280,24 @@ Return a JSON object with this structure:
     res.status(500).json({ error: "Internal server error" });
   }
 
-// Returns something like this
-//   "outline": {
-//     "summary": "Overview of options",
-//     "recommendations": [
-//       {
-//         "location_name": "Shelter A",
-//         "reason": "Why it's a good fit",
-//         "action": "What to do next"
-//       },
-//       {
-//         "location_name": "Shelter B",
-//         "reason": "Why it's a good fit",
-//         "action": "What to do next"
-//       }
-//     ],
-//     "general_notes": "Tips for the person"
-//   }
-// }
+  // Returns something like this
+  //   "outline": {
+  //     "summary": "Overview of options",
+  //     "recommendations": [
+  //       {
+  //         "location_name": "Shelter A",
+  //         "reason": "Why it's a good fit",
+  //         "action": "What to do next"
+  //       },
+  //       {
+  //         "location_name": "Shelter B",
+  //         "reason": "Why it's a good fit",
+  //         "action": "What to do next"
+  //       }
+  //     ],
+  //     "general_notes": "Tips for the person"
+  //   }
+  // }
 });
 
 app.listen(PORT, () => {
