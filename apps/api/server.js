@@ -21,7 +21,7 @@ app.get("/api/message", (_req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { message } = req.body ?? {};
+  const { message, language } = req.body ?? {};
 
   if (typeof message !== "string" || !message.trim()) {
     return res.status(400).json({
@@ -29,10 +29,21 @@ app.post("/api/chat", async (req, res) => {
     });
   }
 
-  try {
-    const reply = await generateChatResponse({ message: message.trim() });
+  if (language != null && (typeof language !== "string" || !language.trim())) {
+    return res.status(400).json({
+      error: "'language' must be a non-empty string when provided.",
+    });
+  }
 
-    return res.json({ reply });
+  try {
+    const reply = await generateChatResponse({
+      message: message.trim(),
+      language: language?.trim(),
+    });
+
+    return res.status(200).json({
+      reply,
+    });
   } catch (error) {
     console.error("Chat request failed:", error);
 
@@ -155,6 +166,10 @@ app.delete("/api/locations/:id", (req, res) => {
   res.status(204).end();
 });
 
-app.listen(PORT, () => {
-  console.log(`API running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`API running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
