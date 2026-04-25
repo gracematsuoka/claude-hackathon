@@ -176,6 +176,7 @@ export const ChatInterface = ({ intake }: Props) => {
             <Text style={styles.headerTitle}>Haven</Text>
             <Text style={styles.headerMeta}>
               {intake.distance} mi · {intake.language}
+              {intake.currentLocation ? ` · ${intake.currentLocation.label}` : ''}
             </Text>
           </View>
         </View>

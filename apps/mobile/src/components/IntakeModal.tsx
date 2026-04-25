@@ -32,10 +32,22 @@ const intakeSchema = z.object({
   distance: z.number().min(1).max(50),
 });
 
-export type IntakeData = z.infer<typeof intakeSchema>;
+type IntakeFormValues = z.infer<typeof intakeSchema>;
+
+export interface IntakeLocation {
+  latitude: number;
+  longitude: number;
+  label: string;
+}
+
+export interface IntakeData extends IntakeFormValues {
+  currentLocation: IntakeLocation | null;
+}
 
 interface Props {
   visible: boolean;
+  currentLocation: IntakeLocation | null;
+  locationStatus: string;
   onComplete: (data: IntakeData) => void;
 }
 
@@ -48,12 +60,17 @@ const LANGUAGES = [
 
 const GENDERS = ['Male', 'Female', 'Non-binary', 'Prefer not to say'];
 
-export const IntakeModal = ({ visible, onComplete }: Props) => {
+export const IntakeModal = ({
+  visible,
+  currentLocation,
+  locationStatus,
+  onComplete,
+}: Props) => {
   const [langOpen, setLangOpen] = useState(false);
   const [genderOpen, setGenderOpen] = useState(false);
   const [langSearch, setLangSearch] = useState('');
 
-  const { control, handleSubmit, watch, setValue, formState } = useForm<IntakeData>({
+  const { control, handleSubmit, watch, setValue, formState } = useForm<IntakeFormValues>({
     resolver: zodResolver(intakeSchema),
     defaultValues: {
       language: 'English',
@@ -172,7 +189,13 @@ export const IntakeModal = ({ visible, onComplete }: Props) => {
 
             <Button
               title="Continue"
-              onPress={handleSubmit((d) => onComplete({ ...d, phone: d.phone?.trim() || '' }))}
+              onPress={handleSubmit((d) =>
+                onComplete({
+                  ...d,
+                  phone: d.phone?.trim() || '',
+                  currentLocation,
+                })
+              )}
               style={{ marginTop: 8 }}
             />
           </ScrollView>
@@ -318,6 +341,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.foreground,
     textAlignVertical: 'top',
+  },
+  locationBlock: {
+    gap: 10,
+  },
+  locationStatus: {
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(239, 233, 221, 0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(228, 221, 208, 0.45)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 2,
+  },
+  locationStatusTitle: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: 13,
+    color: colors.foreground,
+  },
+  locationStatusText: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.mutedForeground,
   },
   distRow: {
     flexDirection: 'row',
