@@ -310,7 +310,7 @@ app.delete("/api/locations/:id", async (req, res) => {
 });
 
 app.post("/api/match-locations", async (req, res) => {
-  const { google_places_locs, person } = req.body;
+  const { google_places_locs, person, forceCall } = req.body;
   if (
     !google_places_locs ||
     typeof google_places_locs.results !== "object" ||
@@ -323,8 +323,10 @@ app.post("/api/match-locations", async (req, res) => {
   }
 
   try {
-    const result = await match_locations(google_places_locs, person);
-    return res.json(result);
+    const result = await match_locations(google_places_locs, person, {
+      forceCall: forceCall === true,
+    });
+    res.json(result);
   } catch (err) {
     console.error("match_locations error:", err);
     return res.status(500).json({ error: "Internal server error" });

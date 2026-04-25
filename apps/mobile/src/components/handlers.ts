@@ -282,6 +282,7 @@ export async function deleteLocation(
 interface MatchLocationsParams {
   google_places_locs: JsonObject;
   person: JsonObject;
+  forceCall?: boolean;
 }
 
 export interface MatchLocationsRouteResponse extends RouteResponseBase {
@@ -291,12 +292,14 @@ export interface MatchLocationsRouteResponse extends RouteResponseBase {
 export async function matchLocations({
   google_places_locs,
   person,
+  forceCall,
 }: MatchLocationsParams): Promise<MatchLocationsRouteResponse> {
   const { parsedBody, ...base } = await requestJson("/api/match-locations", {
     method: "POST",
     body: {
       google_places_locs,
       person,
+      forceCall,
     },
   });
 

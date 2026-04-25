@@ -1,4 +1,5 @@
 const GOOGLE_PLACES_BASE_URL = "https://places.googleapis.com/v1";
+const MAX_RESULTS_PER_CATEGORY = 8;
 
 const FILTER_CONFIG = {
   housing: {
@@ -42,6 +43,19 @@ function validateRadius(radius) {
   }
 
   return parsed;
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function getApiKey() {
@@ -93,6 +107,25 @@ function mapPlace(place) {
   };
 }
 
+function isWithinRadius(place, latitude, longitude, radius) {
+  if (place.latitude == null || place.longitude == null) {
+    return false;
+  }
+
+  return (
+    haversineMeters(latitude, longitude, place.latitude, place.longitude) <=
+    radius
+  );
+}
+
+function distanceFromCenter(place, latitude, longitude) {
+  if (place.latitude == null || place.longitude == null) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return haversineMeters(latitude, longitude, place.latitude, place.longitude);
+}
+
 async function searchHousing({ latitude, longitude, radius }) {
   const resultsById = new Map();
 
@@ -102,8 +135,8 @@ async function searchHousing({ latitude, longitude, radius }) {
         "places.id,places.displayName,places.location,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber",
       body: {
         textQuery,
-        pageSize: 20,
-        locationBias: {
+        pageSize: 10,
+        locationRestriction: {
           circle: {
             center: { latitude, longitude },
             radius,
@@ -117,11 +150,22 @@ async function searchHousing({ latitude, longitude, radius }) {
         continue;
       }
 
-      resultsById.set(place.id, mapPlace(place));
+      const mappedPlace = mapPlace(place);
+      if (!isWithinRadius(mappedPlace, latitude, longitude, radius)) {
+        continue;
+      }
+
+      resultsById.set(place.id, mappedPlace);
     }
   }
 
-  return Array.from(resultsById.values());
+  return Array.from(resultsById.values())
+    .sort(
+      (a, b) =>
+        distanceFromCenter(a, latitude, longitude) -
+        distanceFromCenter(b, latitude, longitude),
+    )
+    .slice(0, MAX_RESULTS_PER_CATEGORY);
 }
 
 async function searchFoodShelter({ latitude, longitude, radius }) {
@@ -133,8 +177,8 @@ async function searchFoodShelter({ latitude, longitude, radius }) {
         "places.id,places.displayName,places.location,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber",
       body: {
         textQuery,
-        pageSize: 20,
-        locationBias: {
+        pageSize: 10,
+        locationRestriction: {
           circle: {
             center: { latitude, longitude },
             radius,
@@ -148,11 +192,22 @@ async function searchFoodShelter({ latitude, longitude, radius }) {
         continue;
       }
 
-      resultsById.set(place.id, mapPlace(place));
+      const mappedPlace = mapPlace(place);
+      if (!isWithinRadius(mappedPlace, latitude, longitude, radius)) {
+        continue;
+      }
+
+      resultsById.set(place.id, mappedPlace);
     }
   }
 
-  return Array.from(resultsById.values());
+  return Array.from(resultsById.values())
+    .sort(
+      (a, b) =>
+        distanceFromCenter(a, latitude, longitude) -
+        distanceFromCenter(b, latitude, longitude),
+    )
+    .slice(0, MAX_RESULTS_PER_CATEGORY);
 }
 
 function parseBoolean(value) {
@@ -171,8 +226,11 @@ async function searchPlacesByFilter(params) {
   const latitude = parseCoordinate(params.latitude, "latitude");
   const longitude = parseCoordinate(params.longitude, "longitude");
   const radius = validateRadius(params.radius);
-  const wantsFood = parseBoolean(params.isFood);
-  const wantsHousing = parseBoolean(params.isHome);
+  const requestedFood = parseBoolean(params.isFood);
+  const requestedHousing = parseBoolean(params.isHome);
+  const wantsFood = requestedFood || (!requestedFood && !requestedHousing);
+  const wantsHousing =
+    requestedHousing || (!requestedFood && !requestedHousing);
 
   const res = { food: [], housing: [] };
   if (wantsFood) {
