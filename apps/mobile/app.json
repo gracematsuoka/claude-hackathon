@@ -8,7 +8,10 @@
     "scheme": "mobile",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Haven uses your location to find nearby shelters, meals, and support."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -33,6 +36,12 @@
             "image": "./assets/images/splash-icon.png",
             "imageWidth": 76
           }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Haven uses your location to find nearby shelters, meals, and support."
         }
       ],
       "expo-font",
