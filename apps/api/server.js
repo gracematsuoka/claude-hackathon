@@ -1,6 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const db = require("./db");
+const { match_locations } = require("./match_locations");
+const { generateChatResponse } = require("./src/services/llm");
 const { searchPlacesByFilter } = require("./src/services/googlePlaces");
 
 const app = express();
@@ -15,6 +18,28 @@ app.get("/health", (_req, res) => {
 
 app.get("/api/message", (_req, res) => {
   res.json({ message: "Hello from Express" });
+});
+
+app.post("/api/chat", async (req, res) => {
+  const { message } = req.body ?? {};
+
+  if (typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({
+      error: "A non-empty 'message' string is required.",
+    });
+  }
+
+  try {
+    const reply = await generateChatResponse({ message: message.trim() });
+
+    return res.json({ reply });
+  } catch (error) {
+    console.error("Chat request failed:", error);
+
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "Failed to generate chat response.",
+    });
+  }
 });
 
 app.get("/api/places", async (req, res) => {

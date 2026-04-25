@@ -1,7 +1,4 @@
-import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {
   useFonts,
@@ -13,12 +10,11 @@ import {
   Inter_500Medium,
   Inter_600SemiBold,
 } from '@expo-google-fonts/inter';
+import { View, ActivityIndicator } from 'react-native';
+import HavenScreen from './src/screens/HavenScreen';
+import { colors } from './src/theme';
 
-SplashScreen.preventAutoHideAsync().catch(() => {
-  // Ignore when the splash screen is already controlled elsewhere.
-});
-
-export default function RootLayout() {
+export default function App() {
   const [fontsLoaded] = useFonts({
     CormorantGaramond_500Medium,
     CormorantGaramond_600SemiBold,
@@ -27,25 +23,18 @@ export default function RootLayout() {
     Inter_600SemiBold,
   });
 
-  useEffect(() => {
-    if (fontsLoaded) {
-      SplashScreen.hideAsync().catch(() => {
-        // Ignore if the splash screen has already been hidden.
-      });
-    }
-  }, [fontsLoaded]);
-
   if (!fontsLoaded) {
-    return null;
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
   }
 
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="explore" />
-      </Stack>
+      <HavenScreen />
     </SafeAreaProvider>
   );
 }
