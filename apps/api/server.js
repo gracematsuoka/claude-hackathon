@@ -5,6 +5,8 @@ const db = require("./db");
 const { match_locations } = require("./match_locations");
 const { generateChatResponse } = require("./src/services/llm");
 const { searchPlacesByFilter } = require("./src/services/googlePlaces");
+const { db } = require("./firebase");
+const { match_locations } = require("./match_locations");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -55,90 +57,113 @@ app.get("/api/places", async (req, res) => {
       longitude: req.query.longitude,
       radius: req.query.radius,
       filter: req.query.filter,
+      isFood: req.query.isFood,
+      isHome: req.query.isHome,
     });
 
-    res.json({
-      count: results.length,
-      results,
-    });
-    // res will look like
-    // { count: number; results: {
-    //   "house": {
-    //     latitude: place.location?.latitude ?? null,
-    //     longitude: place.location?.longitude ?? null,
-    //     address: place.formattedAddress ?? null,
-    //     phoneNumber:
-    //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
-    //   }[],
-    //   "food": {
-    //     latitude: place.location?.latitude ?? null,
-    //     longitude: place.location?.longitude ?? null,
-    //     address: place.formattedAddress ?? null,
-    //     phoneNumber:
-    //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
-    //   }[]
-    // }}
+    const count = Object.values(results).reduce(
+      (total, entries) => total + entries.length,
+      0,
+    );
+
+    res.json({ count, results });
   } catch (error) {
     const statusCode =
       error.message === "GOOGLE_MAPS_API_KEY is not configured." ? 500 : 400;
-
-    res.status(statusCode).json({
-      error: error.message,
-    });
+    res.status(statusCode).json({ error: error.message });
   }
+  // res will look like
+  // { count: number; results: {
+  //   "housing": {
+  //     name: place.displayName?.text ?? place.name ?? null,
+  //     placeId: place.id ?? null,
+  //     latitude: place.location?.latitude ?? null,
+  //     longitude: place.location?.longitude ?? null,
+  //     address: place.formattedAddress ?? null,
+  //     phoneNumber:
+  //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
+  //   }[],
+  //   "food": {
+  //     name: place.displayName?.text ?? place.name ?? null,
+  //     placeId: place.id ?? null,
+  //     latitude: place.location?.latitude ?? null,
+  //     longitude: place.location?.longitude ?? null,
+  //     address: place.formattedAddress ?? null,
+  //     phoneNumber:
+  //       place.nationalPhoneNumber ?? place.internationalPhoneNumber ?? null,
+  //   }[]
+  // }}
 });
 
-
-// Locations
-app.get("/api/locations", (_req, res) => {
-  const locations = db.prepare("SELECT * FROM locations").all();
-  res.json(locations);
+// Locations CRUD
+app.get("/api/locations", async (_req, res) => {
+  const snap = await db.collection("locations").get();
+  res.json(snap.docs.map((d) => d.data()));
 });
 
-app.get("/api/locations/:id", (req, res) => {
-  const location = db.prepare("SELECT * FROM locations WHERE id = ?").get(req.params.id);
-  if (!location) return res.status(404).json({ error: "Not found" });
-  res.json(location);
+app.get("/api/locations/:id", async (req, res) => {
+  const doc = await db.collection("locations").doc(req.params.id).get();
+  if (!doc.exists) return res.status(404).json({ error: "Not found" });
+  res.json(doc.data());
 });
 
-app.post("/api/locations", (req, res) => {
+app.post("/api/locations", async (req, res) => {
   const { name, address, phone, latitude, longitude } = req.body;
   if (!name) return res.status(400).json({ error: "name is required" });
-  const result = db
-    .prepare(
-      "INSERT INTO locations (name, address, phone, latitude, longitude) VALUES (?, ?, ?, ?, ?)"
-    )
-    .run(name, address ?? null, phone ?? null, latitude ?? null, longitude ?? null);
-  const location = db.prepare("SELECT * FROM locations WHERE id = ?").get(result.lastInsertRowid);
+  const ref = db.collection("locations").doc();
+  const now = new Date().toISOString();
+  const location = {
+    id: ref.id,
+    name,
+    address: address ?? null,
+    phone: phone ?? null,
+    latitude: latitude ?? null,
+    longitude: longitude ?? null,
+    google_place_id: null,
+    last_called: null,
+    space_available: null,
+    created_at: now,
+    updated_at: now,
+  };
+  await ref.set(location);
   res.status(201).json(location);
 });
 
-app.put("/api/locations/:id", (req, res) => {
+app.put("/api/locations/:id", async (req, res) => {
+  const ref = db.collection("locations").doc(req.params.id);
+  const doc = await ref.get();
+  if (!doc.exists) return res.status(404).json({ error: "Not found" });
   const { name, address, phone, latitude, longitude } = req.body;
-  const existing = db.prepare("SELECT * FROM locations WHERE id = ?").get(req.params.id);
-  if (!existing) return res.status(404).json({ error: "Not found" });
-  db.prepare(
-    `UPDATE locations
-     SET name = ?, address = ?, phone = ?, latitude = ?, longitude = ?,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  ).run(
-    name ?? existing.name,
-    address ?? existing.address,
-    phone ?? existing.phone,
-    latitude ?? existing.latitude,
-    longitude ?? existing.longitude,
-    req.params.id
-  );
-  const location = db.prepare("SELECT * FROM locations WHERE id = ?").get(req.params.id);
-  res.json(location);
+  const updates = { updated_at: new Date().toISOString() };
+  if (name !== undefined) updates.name = name;
+  if (address !== undefined) updates.address = address;
+  if (phone !== undefined) updates.phone = phone;
+  if (latitude !== undefined) updates.latitude = latitude;
+  if (longitude !== undefined) updates.longitude = longitude;
+  await ref.update(updates);
+  res.json((await ref.get()).data());
+});
+
+app.delete("/api/locations/:id", async (req, res) => {
+  const ref = db.collection("locations").doc(req.params.id);
+  const doc = await ref.get();
+  if (!doc.exists) return res.status(404).json({ error: "Not found" });
+  await ref.delete();
+  res.status(204).end();
 });
 
 // match_locations — core ShelterFlow matching endpoint
 app.post("/api/match-locations", async (req, res) => {
   const { google_places_locs, person } = req.body;
-  if (!Array.isArray(google_places_locs) || !person?.message) {
-    return res.status(400).json({ error: "google_places_locs (array) and person.message are required" });
+  if (
+    !google_places_locs ||
+    typeof google_places_locs.results !== "object" ||
+    !person?.message
+  ) {
+    return res.status(400).json({
+      error:
+        "google_places_locs ({ count, results: { house?, food? } }) and person.message are required",
+    });
   }
   try {
     const result = await match_locations(google_places_locs, person);
@@ -149,10 +174,109 @@ app.post("/api/match-locations", async (req, res) => {
   }
 });
 
-app.delete("/api/locations/:id", (req, res) => {
-  const result = db.prepare("DELETE FROM locations WHERE id = ?").run(req.params.id);
-  if (result.changes === 0) return res.status(404).json({ error: "Not found" });
-  res.status(204).end();
+// Generate personalized outline describing how each location relates to user needs
+app.post("/api/generate-outline", async (req, res) => {
+  const OpenAI = require("openai");
+  const { matchResult, person } = req.body;
+
+  if (!matchResult || !person?.message) {
+    return res.status(400).json({
+      error: "matchResult (from /api/match-locations) and person.message are required",
+    });
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(500).json({ error: "OPENAI_API_KEY is not configured." });
+  }
+
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const { locations = [], no_phone = [] } = matchResult;
+    const allLocations = [...locations, ...no_phone];
+
+    if (!allLocations.length) {
+      return res.json({ outline: "No locations available to generate an outline." });
+    }
+
+    // Build location details for the prompt
+    const locationDetails = allLocations
+      .map((loc) => {
+        const status = loc.call_status === "no_phone" ? "No phone number available" :
+          loc.space_available === true ? "Has space available" :
+          loc.space_available === false ? "No space available" :
+          "Availability unknown";
+        return `### ${loc.name}
+- Address: ${loc.address ?? "Unknown"}
+- Phone: ${loc.phone ?? "N/A"}
+- Category: ${loc.category ?? "Unknown"}
+- Status: ${status}
+- Requirements: ${loc.requirements ?? "None listed"}
+- Check-in Info: ${loc.checkin_info ?? "Not provided"}
+- Notes: ${loc.relevant_notes ?? "None"}`;
+      })
+      .join("\n\n");
+
+    const systemPrompt = `You are a helpful assistant that creates personalized outlines for people experiencing homelessness.
+Given a list of shelter locations with their availability and details, create a clear, compassionate outline that explains how each location relates to the person's specific needs.
+Always respond with valid JSON only — no markdown, no explanation.`;
+
+    const userPrompt = `Person seeking shelter:
+- Name: ${person.name ?? "Unknown"}
+- Gender: ${person.gender ?? "Not specified"}
+- Specific needs/message: ${person.message}
+- Current location: ${person.current_location ?? "Unknown"}
+
+Available locations:
+${locationDetails}
+
+Return a JSON object with this structure:
+{
+  "summary": "A brief overview of the options available",
+  "recommendations": [
+    {
+      "location_name": string,
+      "reason": "Why this location is a good fit for the person's needs",
+      "action": "What the person should do next (call, go there, etc.)"
+    }
+  ],
+  "general_notes": "Any helpful tips or information for the person"
+}`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    });
+
+    const parsed = JSON.parse(completion.choices[0].message.content);
+    res.json({ outline: parsed });
+  } catch (err) {
+    console.error("generate-outline error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+
+// Returns something like this
+//   "outline": {
+//     "summary": "Overview of options",
+//     "recommendations": [
+//       {
+//         "location_name": "Shelter A",
+//         "reason": "Why it's a good fit",
+//         "action": "What to do next"
+//       },
+//       {
+//         "location_name": "Shelter B",
+//         "reason": "Why it's a good fit",
+//         "action": "What to do next"
+//       }
+//     ],
+//     "general_notes": "Tips for the person"
+//   }
+// }
 });
 
 app.listen(PORT, () => {

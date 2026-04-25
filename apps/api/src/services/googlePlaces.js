@@ -2,18 +2,25 @@ const GOOGLE_PLACES_BASE_URL = "https://places.googleapis.com/v1";
 
 const FILTER_CONFIG = {
   housing: {
-    mode: "nearby",
-    includedTypes: [
-      "apartment_building",
-      "apartment_complex",
-      "housing_complex",
-      "lodging",
-      "hostel",
+    mode: "text",
+    queries: [
+      "homeless shelter",
+      "emergency shelter",
+      "women's shelter",
+      "men's shelter",
+      "family shelter",
+      "youth shelter",
     ],
   },
   food_shelter: {
     mode: "text",
-    queries: ["food shelter", "homeless shelter", "food bank", "soup kitchen"],
+    queries: [
+      "food bank",
+      "soup kitchen",
+      "free meal center",
+      "homeless shelter meal service",
+      "community meal program",
+    ],
   },
 };
 
@@ -76,6 +83,8 @@ async function callPlacesApi(path, { method = "POST", body, fieldMask }) {
 
 function mapPlace(place) {
   return {
+    name: place.displayName?.text ?? place.name ?? null,
+    placeId: place.id ?? null,
     latitude: place.location?.latitude ?? null,
     longitude: place.location?.longitude ?? null,
     address: place.formattedAddress ?? null,
@@ -85,32 +94,12 @@ function mapPlace(place) {
 }
 
 async function searchHousing({ latitude, longitude, radius }) {
-  const response = await callPlacesApi("/places:searchNearby", {
-    fieldMask:
-      "places.id,places.location,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber",
-    body: {
-      includedTypes: FILTER_CONFIG.housing.includedTypes,
-      maxResultCount: 20,
-      rankPreference: "DISTANCE",
-      locationRestriction: {
-        circle: {
-          center: { latitude, longitude },
-          radius,
-        },
-      },
-    },
-  });
-
-  return (response.places || []).map(mapPlace);
-}
-
-async function searchFoodShelter({ latitude, longitude, radius }) {
   const resultsById = new Map();
 
-  for (const textQuery of FILTER_CONFIG.food_shelter.queries) {
+  for (const textQuery of FILTER_CONFIG.housing.queries) {
     const response = await callPlacesApi("/places:searchText", {
       fieldMask:
-        "places.id,places.location,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber",
+        "places.id,places.displayName,places.location,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber",
       body: {
         textQuery,
         pageSize: 20,
@@ -135,20 +124,65 @@ async function searchFoodShelter({ latitude, longitude, radius }) {
   return Array.from(resultsById.values());
 }
 
+async function searchFoodShelter({ latitude, longitude, radius }) {
+  const resultsById = new Map();
+
+  for (const textQuery of FILTER_CONFIG.food_shelter.queries) {
+    const response = await callPlacesApi("/places:searchText", {
+      fieldMask:
+        "places.id,places.displayName,places.location,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber",
+      body: {
+        textQuery,
+        pageSize: 20,
+        locationBias: {
+          circle: {
+            center: { latitude, longitude },
+            radius,
+          },
+        },
+      },
+    });
+
+    for (const place of response.places || []) {
+      if (!place.id) {
+        continue;
+      }
+
+      resultsById.set(place.id, mapPlace(place));
+    }
+  }
+
+  return Array.from(resultsById.values());
+}
+
+function parseBoolean(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  return value.toLowerCase() === "true";
+}
+
 async function searchPlacesByFilter(params) {
   const latitude = parseCoordinate(params.latitude, "latitude");
   const longitude = parseCoordinate(params.longitude, "longitude");
   const radius = validateRadius(params.radius);
-  const isFood = params.isFood;
-  const isHome = params.isHome;
+  const wantsFood = parseBoolean(params.isFood);
+  const wantsHousing = parseBoolean(params.isHome);
 
-  const res = { food: [], house: [] };
-  if (isFood) {
-    res.food = searchHousing({ latitude, longitude, radius });
+  const res = { food: [], housing: [] };
+  if (wantsFood) {
+    res.food = await searchFoodShelter({ latitude, longitude, radius });
   }
-  if (isHome) {
-    res.home = searchFoodShelter({ latitude, longitude, radius });
+  if (wantsHousing) {
+    res.housing = await searchHousing({ latitude, longitude, radius });
   }
+
+  return res;
 }
 
 module.exports = {
