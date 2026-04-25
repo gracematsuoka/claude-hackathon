@@ -1,4 +1,14 @@
-# Expo + Express Monorepo
+# Shelter Flow
+
+## Project Description
+
+### Inspiration
+Over February Break, Scott and Ezra met an unhoused man from Cameroon who only spoke French. After buying him dinner and a toothbrush, we used Google Translate to determine his needs. However, we had to call four different homeless shelters to find a place for the man to stay.
+
+### What it does
+When an unhoused individual reaches out to our ShelterFlow chatbot, our app calls nearby homeless shelters before returning a recommendation of next steps for the user.
+
+----
 
 This project contains:
 
