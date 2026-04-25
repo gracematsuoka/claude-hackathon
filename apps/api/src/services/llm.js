@@ -41,6 +41,55 @@ function buildChatRequest({ message, language }) {
   };
 }
 
+function parseChatResponse(reply) {
+  let parsed;
+
+  try {
+    parsed = JSON.parse(reply);
+  } catch (_error) {
+    const error = new Error("The LLM returned invalid JSON.");
+    error.statusCode = 502;
+    throw error;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const error = new Error("The LLM response must be a JSON object.");
+    error.statusCode = 502;
+    throw error;
+  }
+
+  if (typeof parsed.message !== "string" || !parsed.message.trim()) {
+    const error = new Error("The LLM response must include a non-empty message.");
+    error.statusCode = 502;
+    throw error;
+  }
+
+  return {
+    reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+    needs: Array.isArray(parsed.needs) ? parsed.needs : [],
+    message: parsed.message.trim(),
+    dispatch: Boolean(parsed.dispatch),
+  };
+}
+
+function extractResponseText(data) {
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+
+  const textParts = [];
+
+  for (const outputItem of data?.output || []) {
+    for (const contentItem of outputItem?.content || []) {
+      if (typeof contentItem?.text === "string" && contentItem.text.trim()) {
+        textParts.push(contentItem.text.trim());
+      }
+    }
+  }
+
+  return textParts.join("\n").trim();
+}
+
 async function generateChatResponse({ message, language }) {
   if (!process.env.OPENAI_API_KEY) {
     const error = new Error("OPENAI_API_KEY is not configured.");
@@ -73,7 +122,7 @@ async function generateChatResponse({ message, language }) {
     throw error;
   }
 
-  const reply = data?.output_text?.trim();
+  const reply = extractResponseText(data);
 
   if (!reply) {
     const error = new Error("The LLM returned an empty response.");
@@ -81,11 +130,10 @@ async function generateChatResponse({ message, language }) {
     throw error;
   }
 
-  return reply;
+  return parseChatResponse(reply);
 }
 
 module.exports = {
-  BASE_SYSTEM_PROMPT,
   buildSystemPrompt,
   generateChatResponse,
 };

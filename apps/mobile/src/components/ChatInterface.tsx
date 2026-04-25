@@ -1,19 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, fonts, radius, shadow } from '../theme';
-import type { IntakeData } from './IntakeModal';
+} from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { colors, fonts, radius, shadow } from "../theme";
+import type { IntakeData } from "./IntakeModal";
+import { INITIAL_MESSAGES } from "./utils";
+import { sendChatMessage } from "../../../api/handlers";
 
 interface Props {
   intake: IntakeData;
@@ -21,61 +22,40 @@ interface Props {
 
 interface Message {
   id: string;
-  role: 'bot' | 'user';
+  role: "bot" | "user";
   text: string;
 }
 
-const SUGGESTED_REPLIES = [
-  'A place to sleep tonight',
-  'Hot meal nearby',
-  'Medical help',
-  'Someone to talk to',
-];
+interface ChatRouteResponse {
+  reasoning?: string;
+  needs?: string[];
+  message?: string;
+  dispatch?: boolean;
+  error?: string;
+  status: number;
+  ok: boolean;
+  rawBody: string;
+}
 
-const DUMMY_RESPONSES: { match: RegExp; reply: string }[] = [
-  {
-    match: /(sleep|stay|shelter|bed|night)/i,
-    reply:
-      "I found **3 shelters within your travel range** with open beds tonight:\n\n• **Sunrise House** — 0.6 mi · check-in 6 PM\n• **Hope Center** — 1.2 mi · check-in 7 PM\n• **St. Mary's Refuge** — 1.8 mi · women & families\n\nWould you like directions to one of these?",
-  },
-  {
-    match: /(food|meal|eat|hungry|hot)/i,
-    reply:
-      "There's a **free hot meal** being served right now:\n\n• **Community Kitchen** — 0.4 mi · open until 8 PM\n• **First Baptist** — 1.1 mi · dinner at 6 PM\n\nNo ID required at either location.",
-  },
-  {
-    match: /(doctor|medical|sick|hurt|pain|clinic)/i,
-    reply:
-      '**Free clinics** open today:\n\n• **Wellness Mobile Unit** — 0.8 mi · open until 5 PM\n• **County Health** — 1.5 mi · walk-ins welcome\n\nIf this is an emergency, please call 911.',
-  },
-  {
-    match: /(talk|lonely|sad|alone|counsel)/i,
-    reply:
-      "I'm here to listen. You can also reach a caring person right now:\n\n• **Crisis line:** 988 (call or text)\n• **Drop-in counseling** — 1.0 mi · open until 9 PM\n\nWhat's on your mind?",
-  },
-  {
-    match: /(yes|directions|how do i get|map)/i,
-    reply:
-      'Walking directions are ready. The route is **safe and well-lit**, and takes about **15 minutes**. I\'ll text them to you if you\'d like.',
-  },
-];
+const FALLBACK_ERROR_MESSAGE =
+  "I had trouble reaching Haven just now. Please try again in a moment.";
 
-const getDummyReply = (text: string) => {
-  const found = DUMMY_RESPONSES.find((r) => r.match.test(text));
-  return (
-    found?.reply ??
-    "Thank you for sharing that. I'm putting together some options nearby — can you tell me a little more about what would help most right now?"
-  );
-};
+const getInitialMessage = (language: string) =>
+  INITIAL_MESSAGES[language] ?? INITIAL_MESSAGES.English;
 
 // Simple bold + bullet renderer for RN
 const renderText = (text: string) => {
-  return text.split('\n').map((line, i) => {
-    if (line.trim() === '') return <View key={i} style={{ height: 8 }} />;
-    if (line.startsWith('• ')) {
+  return text.split("\n").map((line, i) => {
+    if (line.trim() === "") return <View key={i} style={{ height: 8 }} />;
+    if (line.startsWith("• ")) {
       return (
-        <View key={i} style={{ flexDirection: 'row', gap: 8, marginVertical: 1 }}>
-          <Text style={{ color: colors.accent, fontFamily: fonts.body }}>•</Text>
+        <View
+          key={i}
+          style={{ flexDirection: "row", gap: 8, marginVertical: 1 }}
+        >
+          <Text style={{ color: colors.accent, fontFamily: fonts.body }}>
+            •
+          </Text>
           <Text style={styles.botText}>{renderInline(line.slice(2))}</Text>
         </View>
       );
@@ -91,7 +71,7 @@ const renderText = (text: string) => {
 const renderInline = (s: string) => {
   const parts = s.split(/(\*\*[^*]+\*\*)/g);
   return parts.map((p, i) => {
-    if (p.startsWith('**') && p.endsWith('**')) {
+    if (p.startsWith("**") && p.endsWith("**")) {
       return (
         <Text key={i} style={{ fontFamily: fonts.bodySemibold }}>
           {p.slice(2, -2)}
@@ -105,54 +85,89 @@ const renderInline = (s: string) => {
 export const ChatInterface = ({ intake }: Props) => {
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<Message[]>([
-    { id: 'init', role: 'bot', text: 'What services do you need?' },
+    { id: "init", role: "bot", text: getInitialMessage(intake.language) },
   ]);
-  const [input, setInput] = useState('');
+  const [responses, setResponses] = useState<ChatRouteResponse[]>([]);
+  const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
   const listRef = useRef<FlatList>(null);
-  const seededRef = useRef(false);
-
-  useEffect(() => {
-    if (seededRef.current) return;
-    seededRef.current = true;
-    if (intake.need) {
-      const t = setTimeout(() => sendMessage(intake.need), 600);
-      return () => clearTimeout(t);
-    }
-  }, []);
 
   useEffect(() => {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
   }, [messages, typing]);
 
-  const sendMessage = (text: string) => {
+  const sendMessage = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+
     setMessages((m) => [
       ...m,
-      { id: `${Date.now()}-u`, role: 'user', text: trimmed },
+      { id: `${Date.now()}-u`, role: "user", text: trimmed },
     ]);
-    setInput('');
+    setInput("");
     setTyping(true);
-    setTimeout(() => {
+
+    try {
+      const routeResponse = await sendChatMessage({
+        message: trimmed,
+        language: intake.language,
+      });
+
+      setResponses((current) => [...current, routeResponse]);
+
+      if (!routeResponse.ok) {
+        throw new Error(routeResponse.error || "Chat request failed.");
+      }
+
+      if (!routeResponse.rawBody.trim().startsWith("{")) {
+        throw new Error(
+          "The chat endpoint returned a non-JSON response. Check EXPO_PUBLIC_API_URL.",
+        );
+      }
+
+      if (!routeResponse.message?.trim()) {
+        throw new Error("Chat response was empty.");
+      }
+
       setMessages((m) => [
         ...m,
-        { id: `${Date.now()}-b`, role: 'bot', text: getDummyReply(trimmed) },
+        {
+          id: `${Date.now()}-b`,
+          role: "bot",
+          text: routeResponse.message!.trim(),
+        },
       ]);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error && error.message
+          ? `${FALLBACK_ERROR_MESSAGE}\n\n${error.message}`
+          : FALLBACK_ERROR_MESSAGE;
+
+      setMessages((m) => [
+        ...m,
+        { id: `${Date.now()}-b`, role: "bot", text: errorMessage },
+      ]);
+    } finally {
       setTyping(false);
-    }, 1100);
+    }
   };
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={{ flex: 1, backgroundColor: colors.background }}
     >
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <LinearGradient
-            colors={['#A8B8F0', '#E8B898', '#FCD68C'] as unknown as [string, string, ...string[]]}
+            colors={
+              ["#A8B8F0", "#E8B898", "#FCD68C"] as unknown as [
+                string,
+                string,
+                ...string[],
+              ]
+            }
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.headerOrb}
@@ -164,7 +179,7 @@ export const ChatInterface = ({ intake }: Props) => {
             </Text>
           </View>
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <View style={styles.dot} />
           <Text style={styles.headerMeta}>online</Text>
         </View>
@@ -176,45 +191,41 @@ export const ChatInterface = ({ intake }: Props) => {
         data={messages}
         keyExtractor={(m) => m.id}
         contentContainerStyle={{ padding: 20, gap: 28 }}
-        renderItem={({ item }) => <MessageRow role={item.role} text={item.text} />}
+        renderItem={({ item }) => (
+          <MessageRow role={item.role} text={item.text} />
+        )}
         ListFooterComponent={
           <>
             {typing && (
-              <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+              <View style={{ flexDirection: "row", gap: 12, marginTop: 8 }}>
                 <LinearGradient
-                  colors={['#A8B8F0', '#E8B898', '#FCD68C'] as unknown as [string, string, ...string[]]}
+                  colors={
+                    ["#A8B8F0", "#E8B898", "#FCD68C"] as unknown as [
+                      string,
+                      string,
+                      ...string[],
+                    ]
+                  }
                   style={styles.botAvatar}
                 />
-                <View style={{ flexDirection: 'row', gap: 6, paddingTop: 10 }}>
+                <View style={{ flexDirection: "row", gap: 6, paddingTop: 10 }}>
                   <View style={styles.typingDot} />
                   <View style={styles.typingDot} />
                   <View style={styles.typingDot} />
                 </View>
               </View>
             )}
-            {messages.length <= 2 && !typing && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 8, paddingTop: 16 }}
-              >
-                {SUGGESTED_REPLIES.map((s) => (
-                  <Pressable
-                    key={s}
-                    style={styles.chip}
-                    onPress={() => sendMessage(s)}
-                  >
-                    <Text style={styles.chipText}>{s}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
           </>
         }
       />
 
       {/* Composer */}
-      <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+      <View
+        style={[
+          styles.composerWrap,
+          { paddingBottom: Math.max(insets.bottom, 12) },
+        ]}
+      >
         <View style={styles.composer}>
           <TextInput
             value={input}
@@ -234,16 +245,18 @@ export const ChatInterface = ({ intake }: Props) => {
             <Text style={styles.sendArrow}>↑</Text>
           </Pressable>
         </View>
-        <Text style={styles.footerNote}>Free · confidential · available 24/7</Text>
+        <Text style={styles.footerNote}>
+          Free · confidential · available 24/7
+        </Text>
       </View>
     </KeyboardAvoidingView>
   );
 };
 
-const MessageRow = ({ role, text }: { role: 'bot' | 'user'; text: string }) => {
-  if (role === 'user') {
+const MessageRow = ({ role, text }: { role: "bot" | "user"; text: string }) => {
+  if (role === "user") {
     return (
-      <View style={{ alignItems: 'flex-end' }}>
+      <View style={{ alignItems: "flex-end" }}>
         <View style={styles.userBubble}>
           <Text style={styles.userText}>{text}</Text>
         </View>
@@ -251,9 +264,15 @@ const MessageRow = ({ role, text }: { role: 'bot' | 'user'; text: string }) => {
     );
   }
   return (
-    <View style={{ flexDirection: 'row', gap: 12 }}>
+    <View style={{ flexDirection: "row", gap: 12 }}>
       <LinearGradient
-        colors={['#A8B8F0', '#E8B898', '#FCD68C'] as unknown as [string, string, ...string[]]}
+        colors={
+          ["#A8B8F0", "#E8B898", "#FCD68C"] as unknown as [
+            string,
+            string,
+            ...string[],
+          ]
+        }
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.botAvatar}
@@ -267,11 +286,11 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(228, 221, 208, 0.5)',
+    borderBottomColor: "rgba(228, 221, 208, 0.5)",
     backgroundColor: colors.background,
   },
   headerOrb: {
@@ -309,7 +328,7 @@ const styles = StyleSheet.create({
     color: colors.foreground,
   },
   userBubble: {
-    maxWidth: '80%',
+    maxWidth: "80%",
     paddingHorizontal: 16,
     paddingVertical: 10,
     backgroundColor: colors.secondary,
@@ -326,20 +345,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(42, 36, 56, 0.4)',
-  },
-  chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: 'rgba(239, 233, 221, 0.7)',
-    borderWidth: 1,
-    borderColor: 'rgba(228, 221, 208, 0.5)',
-  },
-  chipText: {
-    fontFamily: fonts.body,
-    fontSize: 13,
-    color: 'rgba(42, 36, 56, 0.75)',
+    backgroundColor: "rgba(42, 36, 56, 0.4)",
   },
   composerWrap: {
     paddingHorizontal: 20,
@@ -347,13 +353,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   composer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     backgroundColor: colors.card,
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: 'rgba(228, 221, 208, 0.7)',
+    borderColor: "rgba(228, 221, 208, 0.7)",
     paddingHorizontal: 16,
     paddingVertical: 6,
     ...shadow.soft,
@@ -370,8 +376,8 @@ const styles = StyleSheet.create({
     height: 32,
     borderRadius: radius.md,
     backgroundColor: colors.foreground,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   sendArrow: {
     color: colors.background,
@@ -380,7 +386,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   footerNote: {
-    textAlign: 'center',
+    textAlign: "center",
     fontFamily: fonts.body,
     fontSize: 11,
     color: colors.mutedForeground,
