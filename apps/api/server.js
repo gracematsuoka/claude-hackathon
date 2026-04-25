@@ -63,6 +63,73 @@ app.get("/api/places", async (req, res) => {
   }
 });
 
+
+// Locations
+app.get("/api/locations", (_req, res) => {
+  const locations = db.prepare("SELECT * FROM locations").all();
+  res.json(locations);
+});
+
+app.get("/api/locations/:id", (req, res) => {
+  const location = db.prepare("SELECT * FROM locations WHERE id = ?").get(req.params.id);
+  if (!location) return res.status(404).json({ error: "Not found" });
+  res.json(location);
+});
+
+app.post("/api/locations", (req, res) => {
+  const { name, address, phone, latitude, longitude } = req.body;
+  if (!name) return res.status(400).json({ error: "name is required" });
+  const result = db
+    .prepare(
+      "INSERT INTO locations (name, address, phone, latitude, longitude) VALUES (?, ?, ?, ?, ?)"
+    )
+    .run(name, address ?? null, phone ?? null, latitude ?? null, longitude ?? null);
+  const location = db.prepare("SELECT * FROM locations WHERE id = ?").get(result.lastInsertRowid);
+  res.status(201).json(location);
+});
+
+app.put("/api/locations/:id", (req, res) => {
+  const { name, address, phone, latitude, longitude } = req.body;
+  const existing = db.prepare("SELECT * FROM locations WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+  db.prepare(
+    `UPDATE locations
+     SET name = ?, address = ?, phone = ?, latitude = ?, longitude = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(
+    name ?? existing.name,
+    address ?? existing.address,
+    phone ?? existing.phone,
+    latitude ?? existing.latitude,
+    longitude ?? existing.longitude,
+    req.params.id
+  );
+  const location = db.prepare("SELECT * FROM locations WHERE id = ?").get(req.params.id);
+  res.json(location);
+});
+
+// match_locations — core ShelterFlow matching endpoint
+app.post("/api/match-locations", async (req, res) => {
+  const { google_places_locs, person } = req.body;
+  if (!Array.isArray(google_places_locs) || !person?.message) {
+    return res.status(400).json({ error: "google_places_locs (array) and person.message are required" });
+  }
+  try {
+    const result = await match_locations(google_places_locs, person);
+    res.json(result);
+  } catch (err) {
+    console.error("match_locations error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.delete("/api/locations/:id", (req, res) => {
+  const result = db.prepare("DELETE FROM locations WHERE id = ?").run(req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: "Not found" });
+  res.status(204).end();
+});
+
 app.listen(PORT, () => {
   console.log(`API running on http://localhost:${PORT}`);
 });
